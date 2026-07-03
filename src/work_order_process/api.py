@@ -164,6 +164,28 @@ class WorkOrderClient:
             return ticket[0] if ticket else None
         return ticket if isinstance(ticket, dict) else None
 
+    def search_tickets_by_create_month(self, month_label: str, page: int = 1, per_page: int = 1000) -> dict[str, Any]:
+        """按创建月份搜索工单列表。
+
+        通用文档中的搜索接口支持 `query=createDT:YYYY-MM`，并返回匹配总数。
+        该接口适合后续按月导出：先拿月度工单 ID，再逐条获取详情。
+        """
+
+        body = self._json_get(
+            "/tickets/search.json",
+            {
+                "query": f"createDT:{month_label}",
+                "sort_by": "createDT",
+                "sort_order": "asc",
+                "page": page,
+                "per_page": per_page,
+            },
+        )
+        tickets = body.get("tickets") if isinstance(body, dict) else None
+        if not isinstance(tickets, dict):
+            raise ApiError(f"Unexpected ticket search response: {body}")
+        return tickets
+
     def fetch_support_detail(self, support_id: str) -> dict | None:
         """按客服 ID 读取客服详情，用于替换 servicerUserId/createrId 等字段。"""
 
@@ -329,10 +351,10 @@ class WorkOrderClient:
             raise ApiError(f"Unexpected ticket response: {response.text[:300]}")
         return body
 
-    def _json_get(self, path: str) -> dict[str, Any]:
+    def _json_get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """读取单个详情接口，并校验返回体是 JSON 对象。"""
 
-        response = self.client.get(path)
+        response = self.client.get(path, params=params)
         if not _looks_successful(response):
             raise ApiError(f"HTTP {response.status_code}: {response.text[:300]}")
         body = _json_or_empty(response)

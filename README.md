@@ -58,3 +58,33 @@ uv run work-order-process run
 - `contacts.json`：字段中文化后的联系人数据
 - `tickets_sample.json`：随机 10 条工单，尽量补充联系人和客户信息
 - `dictionary.json`：从 PDF 解析出的字段字典
+
+## 按月导出工单
+
+先按工单创建时间统计某年的月度数量：
+
+```powershell
+uv run work-order-process ticket-month-counts --year 2025
+```
+
+导出某个月的工单 ID 列表：
+
+```powershell
+uv run work-order-process ticket-month-ids --year 2025 --month 1
+```
+
+输出到 `output/monthly_ticket_ids/2025-01_ticket_ids.json`，文件里会保留接口声明总量、实际抓取数量、`ticket_ids` 和列表页返回的基础字段。
+
+基于某个月的工单 ID 逐条拉详情，并生成原值、value 替换、中文字段三份文件：
+
+```powershell
+uv run work-order-process ticket-month-details --year 2025 --month 1
+```
+
+输出到 `output/monthly_ticket_details/`：
+
+- `2025-01_ticket_details_raw.json`：详情接口原始值
+- `2025-01_ticket_details_value_resolved.json`：英文 key 保留，ID/枚举/自定义字段 value 尽量替换为可读中文
+- `2025-01_ticket_details_chinese.json`：在 value 替换后，再把 key 按数据字典中文化
+
+调试或小批量验证时可以加 `--limit 10`。如果已有 ID 文件是 `--limit` 生成的部分样本，后续要跑整月详情时需要先用 `--overwrite` 重新生成完整 ID；如需重生成已有月度详情文件，也加 `--overwrite`。

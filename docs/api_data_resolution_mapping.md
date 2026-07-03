@@ -12,6 +12,13 @@
 - `output/ticket_details_value_resolved.json`：英文 key 保留，尽量把 ID、枚举、字段选项 value 替换为可读中文。
 - `output/ticket_details_chinese.json`：在 value 已替换的基础上，再用数据字典和项目兜底字典把 key 中文化。
 
+按月导出时会额外生成：
+
+- `output/monthly_ticket_ids/YYYY-MM_ticket_ids.json`：某月工单 ID 列表，来自创建时间搜索接口。
+- `output/monthly_ticket_details/YYYY-MM_ticket_details_raw.json`：某月工单详情原始值。
+- `output/monthly_ticket_details/YYYY-MM_ticket_details_value_resolved.json`：某月工单详情 value 替换结果。
+- `output/monthly_ticket_details/YYYY-MM_ticket_details_chinese.json`：某月工单详情中文字段结果。
+
 ## 认证方式
 
 所有业务接口使用 HTTP Basic Auth：
@@ -29,6 +36,7 @@ response = requests.post(url, data=data, auth=HTTPBasicAuth(username, password))
 | 用途 | 文档地址 | 实际调用路径 | 说明 |
 |---|---|---|---|
 | 获取工单列表 | https://doc.bangwo8.com/438724239e0 | `/tickets` | 先按 2025 年后工单抽样，得到工单号。 |
+| 按创建时间搜索工单 | 通用搜索接口 | `/tickets/search.json?query=createDT:YYYY-MM` | 当前已验证可按月份返回匹配数量和列表页结果，用于月度 ID 导出。 |
 | 获取工单详情 | https://doc.bangwo8.com/438724240e0 | `/tickets/{ticketId}` | 生成 `ticket_details_raw.json` 的原始数据来源。 |
 | 获取工单自定义字段 | https://doc.bangwo8.com/438724249e0 | `/tickets/ticket_fields.json` | 返回工单自定义字段定义。 |
 | 获取工单所有字段 | https://doc.bangwo8.com/438724250e0 | `/tickets/ticket_fields2.json` | 当前用于解释 `field_xxx` 和字段选项 ID。 |
@@ -89,6 +97,39 @@ response = requests.post(url, data=data, auth=HTTPBasicAuth(username, password))
 5. 如果字段选项是级联或嵌套结构，则递归收集选项。
 6. 如果工单字段选项没有命中，再用公司字段选项 `/companies/company_fields.json` 作为兜底。
 
+## 月度导出流程
+
+当前保留的月度查询方法是：
+
+```text
+GET /tickets/search.json?query=createDT:2025-01&sort_by=createDT&sort_order=asc&page=1&per_page=1000
+```
+
+流程分两步：
+
+1. `ticket-month-ids`：按 `YYYY-MM` 分页获取工单列表，保存 `ticket_ids`。
+2. `ticket-month-details`：读取该月 `ticket_ids`，逐条调用 `/tickets/{ticketId}` 获取详情，随后复用现有 value 替换和 key 中文化逻辑。
+
+如果用 `--limit` 生成了部分 ID 文件，后续不带 `--limit` 跑整月详情时会被拦截，需要先用 `--overwrite` 重新生成完整月度 ID，避免把样本误当成全量数据。
+
+已统计 2025 年各月数量如下：
+
+| 月份 | 工单数 |
+|---|---:|
+| 2025-01 | 74040 |
+| 2025-02 | 69553 |
+| 2025-03 | 92483 |
+| 2025-04 | 83785 |
+| 2025-05 | 58536 |
+| 2025-06 | 58767 |
+| 2025-07 | 55212 |
+| 2025-08 | 49835 |
+| 2025-09 | 62167 |
+| 2025-10 | 48419 |
+| 2025-11 | 54148 |
+| 2025-12 | 62792 |
+| 合计 | 769737 |
+
 ## 已确认的特殊字段
 
 | 中文字段 | 原始 key | 原始 value | 替换后 | 来源 |
@@ -134,4 +175,3 @@ response = requests.post(url, data=data, auth=HTTPBasicAuth(username, password))
 | `src/work_order_process/resolver.py` | 实现工单 value 替换逻辑，包括自定义字段和特殊字段。 |
 | `src/work_order_process/dictionary.py` | 解析 PDF 数据字典，并把 key 中文化。 |
 | `src/work_order_process/cli.py` | 命令行入口，例如 `ticket-details-refresh` 和 `ticket-details-resolved`。 |
-

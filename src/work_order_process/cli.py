@@ -4,7 +4,8 @@
 常用命令：
 - customers / contacts：导出客户和联系人；
 - companies / company-contacts：导出公司和公司联系人；
-- ticket-details-refresh：重新获取工单详情并生成 raw、value_resolved、chinese 三份文件。
+- ticket-details-refresh：重新获取工单详情并生成 raw、value_resolved、chinese 三份文件；
+- ticket-month-counts / ticket-month-ids / ticket-month-details：按创建月份统计、导出 ID、导出详情。
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from .api import ApiError, WorkOrderClient
 from .config import load_settings
 from .dictionary import DataDictionary
 from .io import write_json
+from .monthly_export import count_ticket_months, export_month_ticket_details, export_month_ticket_ids
 from .resolver import refresh_ticket_details_from_api, resolve_ticket_details, resolve_ticket_sample_refs
 from .transform import enrich_tickets, translate_many
 
@@ -43,6 +45,9 @@ def main() -> None:
             "tickets-resolved",
             "ticket-details-resolved",
             "ticket-details-refresh",
+            "ticket-month-counts",
+            "ticket-month-ids",
+            "ticket-month-details",
             "tickets",
             "run",
         ],
@@ -50,6 +55,11 @@ def main() -> None:
         default="run",
     )
     parser.add_argument("--seed", type=int, default=None, help="Random seed for ticket sampling.")
+    parser.add_argument("--year", type=int, default=2025, help="Year for monthly ticket commands.")
+    parser.add_argument("--month", type=int, default=None, help="Month number for monthly ticket commands.")
+    parser.add_argument("--per-page", type=int, default=1000, help="Page size for monthly ticket search.")
+    parser.add_argument("--limit", type=int, default=None, help="Optional max rows for monthly commands.")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing monthly output files.")
     args = parser.parse_args()
 
     settings = load_settings()
@@ -92,6 +102,23 @@ def main() -> None:
                 _ticket_details_resolved(client, dictionary, settings.output_dir)
             elif args.command == "ticket-details-refresh":
                 _ticket_details_refresh(client, dictionary, settings.output_dir, settings.ticket_since, settings.sample_size, args.seed)
+            elif args.command == "ticket-month-counts":
+                _ticket_month_counts(client, args.year)
+            elif args.command == "ticket-month-ids":
+                _require_month(args.month)
+                _ticket_month_ids(client, settings.output_dir, args.year, args.month, args.per_page, args.limit, args.overwrite)
+            elif args.command == "ticket-month-details":
+                _require_month(args.month)
+                _ticket_month_details(
+                    client,
+                    dictionary,
+                    settings.output_dir,
+                    args.year,
+                    args.month,
+                    args.per_page,
+                    args.limit,
+                    args.overwrite,
+                )
             elif args.command == "tickets":
                 _tickets(client, dictionary, settings.output_dir, settings.ticket_since, settings.sample_size, args.seed)
             else:
@@ -282,6 +309,83 @@ def _ticket_details_refresh(
     table = Table("Metric", "Value")
     for key, value in report.items():
         table.add_row(key, str(value))
+    console.print(table)
+
+
+def _ticket_month_counts(client: WorkOrderClient, year: int) -> None:
+    """按创建月份统计某一年的工单量，用于判断后续月度导出规模。"""
+
+    report = count_ticket_months(client, year)
+    table = Table("Month", "Count")
+    for item in report["months"]:
+        table.add_row(str(item["month"]), str(item["count"]))
+    table.add_row(f"{year}-total", str(report["total"]))
+    console.print(table)
+
+
+def _ticket_month_ids(
+    client: WorkOrderClient,
+    output_dir,
+    year: int,
+    month: int,
+    per_page: int,
+    limit: int | None,
+    overwrite: bool,
+) -> None:
+    """导出某个月的工单 ID 列表，供详情导出复用。"""
+
+    report = export_month_ticket_ids(
+        output_dir,
+        client,
+        year,
+        month,
+        per_page=per_page,
+        limit=limit,
+        overwrite=overwrite,
+    )
+    _print_report_table(report)
+
+
+def _ticket_month_details(
+    client: WorkOrderClient,
+    dictionary: DataDictionary,
+    output_dir,
+    year: int,
+    month: int,
+    per_page: int,
+    limit: int | None,
+    overwrite: bool,
+) -> None:
+    """按某个月的工单 ID 拉详情，并生成 raw/value_resolved/chinese 三份月度文件。"""
+
+    report = export_month_ticket_details(
+        output_dir,
+        dictionary,
+        client,
+        year,
+        month,
+        per_page=per_page,
+        limit=limit,
+        overwrite=overwrite,
+    )
+    _print_report_table(report)
+
+
+def _require_month(month: int | None) -> None:
+    """月度 ID 和详情导出必须明确指定月份，避免误跑大任务。"""
+
+    if month is None:
+        raise ApiError("Please pass --month 1..12 for this command.")
+
+
+def _print_report_table(report: dict) -> None:
+    """把任务报告以两列表格输出。"""
+
+    table = Table("Metric", "Value")
+    for key, value in report.items():
+        if isinstance(value, list):
+            value = json.dumps(value[:10], ensure_ascii=False)
+        table.add_row(str(key), str(value))
     console.print(table)
 
 
