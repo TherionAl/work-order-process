@@ -1,12 +1,14 @@
-"""按创建月份导出工单 ID 和工单详情。
+"""2025 年工单月度合集与月度样本详情导出。
 
-本模块保留已经验证可用的月度查询方法：
-`/tickets/search.json?query=createDT:YYYY-MM`。后续全量处理时先按月拿工单 ID，
-再按 ID 调详情接口，避免直接一次性处理 2025 年全部工单造成文件过大或任务失控。
+当前保留的业务目标很明确：
+1. 按创建月份导出 2025 年每个月的工单列表合集；
+2. 从每个月的合集里抽 3 条工单；
+3. 对这 3 条详情按现有规则生成 raw、value_resolved、chinese 三份 JSON。
 """
 
 from __future__ import annotations
 
+import random
 import json
 from pathlib import Path
 from typing import Any, Iterable
@@ -17,53 +19,101 @@ from .io import write_json
 from .resolver import TicketFieldResolver, resolve_ticket_detail_values
 
 
-MONTHLY_ID_DIR = "monthly_ticket_ids"
-MONTHLY_DETAIL_DIR = "monthly_ticket_details"
+MONTHLY_TICKET_DIR_TEMPLATE = "{year}_monthly_tickets"
+MONTHLY_SAMPLE_DETAIL_DIR_TEMPLATE = "{year}_monthly_sample_details"
+
+
+def export_year_monthly_tickets_and_samples(
+    output_dir: Path,
+    dictionary: DataDictionary,
+    client: WorkOrderClient,
+    year: int = 2025,
+    months: Iterable[int] | None = None,
+    sample_size: int = 3,
+    seed: int = 2025,
+    per_page: int = 5000,
+    limit_per_month: int | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """导出某一年 12 个月的工单合集，并为每个月抽样生成详情三件套。
+
+    `limit_per_month` 仅用于调试小样本，正式导出不要传它。抽样使用固定 seed，
+    这样多次运行可以得到一致的 3 条样本，方便对照检查。
+    """
+
+    if sample_size < 1:
+        raise ApiError("sample_size must be greater than 0.")
+
+    monthly_ticket_dir = output_dir / MONTHLY_TICKET_DIR_TEMPLATE.format(year=year)
+    monthly_sample_detail_dir = output_dir / MONTHLY_SAMPLE_DETAIL_DIR_TEMPLATE.format(year=year)
+    field_resolver = TicketFieldResolver(client.fetch_ticket_fields(), client.fetch_company_fields())
+
+    month_numbers = list(months) if months is not None else list(range(1, 13))
+    month_reports: list[dict[str, Any]] = []
+    for month in month_numbers:
+        month_label = build_month_label(year, month)
+        ticket_report = _load_or_fetch_month_tickets(
+            output_dir,
+            client,
+            year,
+            month,
+            per_page=per_page,
+            limit_per_month=limit_per_month,
+            overwrite=overwrite,
+        )
+        sample_rows = _sample_ticket_rows(ticket_report["tickets"], sample_size, seed, month_label)
+        detail_report = _export_month_sample_details(
+            monthly_sample_detail_dir,
+            month_label,
+            sample_rows,
+            dictionary,
+            client,
+            field_resolver,
+            overwrite=overwrite or bool(ticket_report.get("_regenerated")),
+        )
+        month_reports.append(
+            {
+                "month": month_label,
+                "declared_count": ticket_report["declared_count"],
+                "fetched_count": ticket_report["fetched_count"],
+                "ticket_output": str(monthly_ticket_dir / f"{month_label}_tickets.json"),
+                **detail_report,
+            }
+        )
+
+    return {
+        "year": year,
+        "ticket_total": sum(item["fetched_count"] for item in month_reports),
+        "detail_total": sum(item["detail_count"] for item in month_reports),
+        "failed_total": sum(item["failed_count"] for item in month_reports),
+        "monthly_ticket_dir": str(monthly_ticket_dir),
+        "monthly_sample_detail_dir": str(monthly_sample_detail_dir),
+        "months": month_reports,
+    }
 
 
 def build_month_label(year: int, month: int) -> str:
-    """把年、月参数格式化为接口搜索需要的 `YYYY-MM`。"""
+    """把年、月格式化为接口搜索需要的 `YYYY-MM`。"""
 
     if month < 1 or month > 12:
         raise ApiError("Month must be between 1 and 12.")
     return f"{year}-{month:02d}"
 
 
-def count_ticket_months(client: WorkOrderClient, year: int) -> dict[str, Any]:
-    """统计指定年份每个月的工单数量。
-
-    搜索接口返回的 `tickets.count` 是字符串，这里统一转成整数，便于估算后续导出规模。
-    """
-
-    months: list[dict[str, Any]] = []
-    total = 0
-    for month in range(1, 13):
-        month_label = build_month_label(year, month)
-        tickets = client.search_tickets_by_create_month(month_label, page=1, per_page=1)
-        count = _safe_int(tickets.get("count"))
-        total += count
-        months.append({"month": month_label, "count": count})
-    return {"year": year, "total": total, "months": months}
-
-
 def fetch_month_ticket_rows(
     client: WorkOrderClient,
     year: int,
     month: int,
-    per_page: int = 1000,
-    limit: int | None = None,
+    per_page: int = 5000,
+    limit_per_month: int | None = None,
 ) -> dict[str, Any]:
-    """按创建月份分页获取工单列表行，重点保留 ticketId。
-
-    返回值同时保存接口声明总量、实际抓取量和列表行。列表行中通常包含 ticketId、
-    subject、createDT、updateDT、url 等字段，后续详情导出只依赖 ticketId。
-    """
+    """通过搜索接口分页获取某个月的工单合集。"""
 
     month_label = build_month_label(year, month)
     if per_page < 1:
         raise ApiError("per_page must be greater than 0.")
-    if limit is not None and limit < 1:
-        raise ApiError("limit must be greater than 0.")
+    if limit_per_month is not None and limit_per_month < 1:
+        raise ApiError("limit_per_month must be greater than 0.")
 
     rows: list[dict[str, Any]] = []
     declared_count = 0
@@ -76,8 +126,8 @@ def fetch_month_ticket_rows(
         if not page_rows:
             break
         rows.extend(page_rows)
-        if limit is not None and len(rows) >= limit:
-            rows = rows[:limit]
+        if limit_per_month is not None and len(rows) >= limit_per_month:
+            rows = rows[:limit_per_month]
             break
         if len(rows) >= declared_count:
             break
@@ -89,150 +139,140 @@ def fetch_month_ticket_rows(
         "fetched_count": len(rows),
         "ticket_ids": _ticket_ids_from_rows(rows),
         "tickets": rows,
+        "limit_per_month": limit_per_month,
     }
 
 
-def export_month_ticket_ids(
+def _load_or_fetch_month_tickets(
     output_dir: Path,
     client: WorkOrderClient,
     year: int,
     month: int,
-    per_page: int = 1000,
-    limit: int | None = None,
-    overwrite: bool = False,
+    per_page: int,
+    limit_per_month: int | None,
+    overwrite: bool,
 ) -> dict[str, Any]:
-    """把指定月份的工单 ID 列表保存到本地 JSON。"""
+    """读取已有月度合集，或调用接口重新生成。"""
 
     month_label = build_month_label(year, month)
-    output_path = _month_ids_path(output_dir, month_label)
+    output_path = _month_ticket_path(output_dir, year, month_label)
     if output_path.exists() and not overwrite:
-        report = _load_id_report(output_path)
-        if _is_partial_id_report(report) and limit is None:
-            raise ApiError(
-                "Existing monthly ticket id file is partial. "
-                "Use --overwrite to regenerate the full month before exporting all details."
-            )
-        return _slice_id_report(report, limit)
+        data = _load_json_object(output_path)
+        if _is_partial_report(data) and limit_per_month is None:
+            report = fetch_month_ticket_rows(client, year, month, per_page=per_page, limit_per_month=None)
+            report["_regenerated"] = True
+            write_json(output_path, report)
+            return report
+        return _slice_month_report(data, limit_per_month)
 
-    report = fetch_month_ticket_rows(client, year, month, per_page=per_page, limit=limit)
-    report["limit"] = limit
-    report["output"] = str(output_path)
+    report = fetch_month_ticket_rows(client, year, month, per_page=per_page, limit_per_month=limit_per_month)
     write_json(output_path, report)
     return report
 
 
-def export_month_ticket_details(
+def _export_month_sample_details(
     output_dir: Path,
+    month_label: str,
+    sample_rows: list[dict[str, Any]],
     dictionary: DataDictionary,
     client: WorkOrderClient,
-    year: int,
-    month: int,
-    per_page: int = 1000,
-    limit: int | None = None,
-    overwrite: bool = False,
+    field_resolver: TicketFieldResolver,
+    overwrite: bool,
 ) -> dict[str, Any]:
-    """按月度工单 ID 逐条拉详情，并生成 raw、value_resolved、chinese 三份文件。
+    """把某个月抽到的工单详情输出成三份 JSON。"""
 
-    详情文件采用流式写入 JSON 数组，避免单月几万条工单全部堆在内存里。
-    如果本地已经有该月 ID 文件，会优先复用；传入 limit 时会按已有 ID 文件截取前 N 条。
-    """
+    raw_path = output_dir / f"{month_label}_sample_details_raw.json"
+    value_path = output_dir / f"{month_label}_sample_details_value_resolved.json"
+    chinese_path = output_dir / f"{month_label}_sample_details_chinese.json"
+    existing = [path for path in (raw_path, value_path, chinese_path) if path.exists()]
+    if len(existing) == 3 and not overwrite:
+        return {
+            "sample_ticket_ids": [str(row.get("ticketId")) for row in sample_rows if row.get("ticketId")],
+            "detail_count": _json_array_len(raw_path),
+            "failed_count": 0,
+            "failed_ids": [],
+            "raw_output": str(raw_path),
+            "value_resolved_output": str(value_path),
+            "chinese_output": str(chinese_path),
+        }
+    if existing and not overwrite:
+        raise ApiError(f"Incomplete sample detail output exists for {month_label}. Use --overwrite to regenerate it.")
 
-    month_label = build_month_label(year, month)
-    raw_path = _month_detail_path(output_dir, month_label, "raw")
-    value_path = _month_detail_path(output_dir, month_label, "value_resolved")
-    chinese_path = _month_detail_path(output_dir, month_label, "chinese")
-    existing_outputs = [path for path in (raw_path, value_path, chinese_path) if path.exists()]
-    if existing_outputs and not overwrite:
-        raise ApiError("Monthly detail output already exists. Use --overwrite to regenerate it.")
-
-    id_report = export_month_ticket_ids(
-        output_dir,
-        client,
-        year,
-        month,
-        per_page=per_page,
-        limit=limit,
-        overwrite=overwrite and limit is None,
-    )
-    ticket_ids = [ticket_id for ticket_id in id_report.get("ticket_ids", []) if str(ticket_id).strip()]
-    if limit is not None:
-        ticket_ids = ticket_ids[:limit]
-
-    field_resolver = TicketFieldResolver(client.fetch_ticket_fields(), client.fetch_company_fields())
-    success_count = 0
+    raw_details: list[dict[str, Any]] = []
+    value_details: list[dict[str, Any]] = []
+    chinese_details: list[dict[str, Any]] = []
     failed_ids: list[str] = []
 
-    with _JsonArrayWriter(raw_path) as raw_writer:
-        with _JsonArrayWriter(value_path) as value_writer:
-            with _JsonArrayWriter(chinese_path) as chinese_writer:
-                for ticket_id in ticket_ids:
-                    raw_detail = client.fetch_ticket_detail(str(ticket_id))
-                    if not raw_detail:
-                        failed_ids.append(str(ticket_id))
-                        continue
-                    value_resolved = resolve_ticket_detail_values(raw_detail, client, field_resolver)
-                    chinese = dictionary.translate_record("tickets", value_resolved)
-                    raw_writer.write(raw_detail)
-                    value_writer.write(value_resolved)
-                    chinese_writer.write(chinese)
-                    success_count += 1
+    for row in sample_rows:
+        ticket_id = str(row.get("ticketId") or "").strip()
+        if not ticket_id:
+            continue
+        raw_detail = client.fetch_ticket_detail(ticket_id)
+        if not raw_detail:
+            failed_ids.append(ticket_id)
+            continue
+        value_resolved = resolve_ticket_detail_values(raw_detail, client, field_resolver)
+        raw_details.append(raw_detail)
+        value_details.append(value_resolved)
+        chinese_details.append(dictionary.translate_record("tickets", value_resolved))
 
+    write_json(raw_path, raw_details)
+    write_json(value_path, value_details)
+    write_json(chinese_path, chinese_details)
     return {
-        "month": month_label,
-        "declared_count": id_report.get("declared_count"),
-        "id_count": len(ticket_ids),
-        "detail_count": success_count,
+        "sample_ticket_ids": [str(row.get("ticketId")) for row in sample_rows if row.get("ticketId")],
+        "detail_count": len(raw_details),
         "failed_count": len(failed_ids),
-        "failed_ids": failed_ids[:50],
-        "id_output": id_report.get("output") or str(_month_ids_path(output_dir, month_label)),
+        "failed_ids": failed_ids,
         "raw_output": str(raw_path),
         "value_resolved_output": str(value_path),
         "chinese_output": str(chinese_path),
     }
 
 
-def _month_ids_path(output_dir: Path, month_label: str) -> Path:
-    """生成某月工单 ID 文件路径。"""
+def _sample_ticket_rows(rows: list[dict[str, Any]], sample_size: int, seed: int, month_label: str) -> list[dict[str, Any]]:
+    """从月度工单合集里按固定种子抽样。"""
 
-    return output_dir / MONTHLY_ID_DIR / f"{month_label}_ticket_ids.json"
-
-
-def _month_detail_path(output_dir: Path, month_label: str, suffix: str) -> Path:
-    """生成某月详情结果文件路径。"""
-
-    return output_dir / MONTHLY_DETAIL_DIR / f"{month_label}_ticket_details_{suffix}.json"
+    if len(rows) <= sample_size:
+        return list(rows)
+    rng = random.Random(f"{seed}:{month_label}")
+    return rng.sample(rows, sample_size)
 
 
-def _load_id_report(path: Path) -> dict[str, Any]:
-    """读取已有的月度工单 ID 文件。"""
+def _month_ticket_path(output_dir: Path, year: int, month_label: str) -> Path:
+    """生成某个月工单合集文件路径。"""
+
+    return output_dir / MONTHLY_TICKET_DIR_TEMPLATE.format(year=year) / f"{month_label}_tickets.json"
+
+
+def _load_json_object(path: Path) -> dict[str, Any]:
+    """读取 JSON 对象文件。"""
 
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
-        raise ApiError(f"Monthly ticket id file is not a JSON object: {path}")
-    data.setdefault("output", str(path))
+        raise ApiError(f"Expected JSON object: {path}")
     return data
 
 
-def _is_partial_id_report(report: dict[str, Any]) -> bool:
-    """判断已有 ID 文件是否只是 limit 样本，而不是完整月份。"""
+def _is_partial_report(report: dict[str, Any]) -> bool:
+    """判断月度合集是否只是调试样本。"""
 
     declared_count = _safe_int(report.get("declared_count"))
     fetched_count = _safe_int(report.get("fetched_count"))
     return declared_count > 0 and fetched_count > 0 and fetched_count < declared_count
 
 
-def _slice_id_report(report: dict[str, Any], limit: int | None) -> dict[str, Any]:
-    """按 limit 返回 ID 文件的视图，不修改磁盘上的原文件。"""
+def _slice_month_report(report: dict[str, Any], limit_per_month: int | None) -> dict[str, Any]:
+    """调试时从已有月度合集里截取前 N 条，不修改磁盘文件。"""
 
-    if limit is None:
+    if limit_per_month is None:
         return report
     sliced = dict(report)
-    tickets = _extract_search_rows(sliced.get("tickets"))
-    ticket_ids = [str(ticket_id) for ticket_id in sliced.get("ticket_ids", []) if str(ticket_id).strip()]
-    sliced["tickets"] = tickets[:limit]
-    sliced["ticket_ids"] = ticket_ids[:limit]
-    sliced["fetched_count"] = len(sliced["ticket_ids"])
-    sliced["limit"] = limit
+    tickets = _extract_search_rows(report.get("tickets"))
+    sliced["tickets"] = tickets[:limit_per_month]
+    sliced["ticket_ids"] = _ticket_ids_from_rows(sliced["tickets"])
+    sliced["fetched_count"] = len(sliced["tickets"])
+    sliced["limit_per_month"] = limit_per_month
     return sliced
 
 
@@ -245,21 +285,21 @@ def _extract_search_rows(results: Any) -> list[dict[str, Any]]:
 
 
 def _ticket_ids_from_rows(rows: Iterable[dict[str, Any]]) -> list[str]:
-    """从工单列表行中提取 ticketId，并去重保持原顺序。"""
+    """从工单列表行里提取 ticketId，并按原顺序去重。"""
 
     seen: set[str] = set()
-    ids: list[str] = []
+    ticket_ids: list[str] = []
     for row in rows:
         ticket_id = str(row.get("ticketId") or "").strip()
         if not ticket_id or ticket_id in seen:
             continue
         seen.add(ticket_id)
-        ids.append(ticket_id)
-    return ids
+        ticket_ids.append(ticket_id)
+    return ticket_ids
 
 
 def _safe_int(value: Any) -> int:
-    """把接口里的数字字符串安全转成 int。"""
+    """把接口返回的数字字符串安全转成 int。"""
 
     try:
         return int(value)
@@ -267,32 +307,8 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
-class _JsonArrayWriter:
-    """流式写入 JSON 数组的小工具，适合单月大量详情导出。"""
+def _json_array_len(path: Path) -> int:
+    """读取 JSON 数组长度，用于复用已有样本详情时汇总数量。"""
 
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self._file = None
-        self._first = True
-
-    def __enter__(self) -> "_JsonArrayWriter":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = self.path.open("w", encoding="utf-8")
-        self._file.write("[\n")
-        return self
-
-    def __exit__(self, *_args: object) -> None:
-        if self._file is None:
-            return
-        self._file.write("\n]\n")
-        self._file.close()
-
-    def write(self, item: Any) -> None:
-        """向数组追加一条 JSON 记录。"""
-
-        if self._file is None:
-            raise ApiError("JSON writer is not open.")
-        if not self._first:
-            self._file.write(",\n")
-        self._file.write(json.dumps(item, ensure_ascii=False, indent=2, default=str))
-        self._first = False
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return len(data) if isinstance(data, list) else 0
