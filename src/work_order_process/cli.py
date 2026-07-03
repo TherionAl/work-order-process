@@ -16,7 +16,7 @@ from rich.table import Table
 from .api import ApiError, WorkOrderClient
 from .config import load_settings
 from .dictionary import DataDictionary
-from .monthly_export import export_year_monthly_tickets_and_samples
+from .monthly_export import export_month_template_samples, export_year_monthly_tickets_and_samples
 
 
 console = Console()
@@ -28,10 +28,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Export 2025 monthly work-order data.")
     parser.add_argument(
         "command",
-        choices=["run", "probe", "dictionary"],
+        choices=["run", "template-samples", "probe", "dictionary"],
         nargs="?",
         default="run",
-        help="run: 导出月度工单合集和每月 3 条详情；probe: 探测认证和接口；dictionary: 导出字段字典。",
+        help="run: 导出月度工单合集和每月 3 条详情；template-samples: 按模板分别抽样；probe: 探测认证和接口。",
     )
     parser.add_argument("--year", type=int, default=2025, help="需要导出的年份，默认 2025。")
     parser.add_argument("--month", type=int, default=None, help="只导出指定月份，取值 1-12；默认导出全年。")
@@ -57,6 +57,21 @@ def main() -> None:
             client.authenticate()
             if args.command == "probe":
                 _probe(client)
+                return
+            if args.command == "template-samples":
+                if args.month is None:
+                    raise ApiError("Please pass --month for template-samples.")
+                report = export_month_template_samples(
+                    settings.output_dir,
+                    dictionary,
+                    client,
+                    year=args.year,
+                    month=args.month,
+                    sample_size=args.sample_size,
+                    seed=args.seed,
+                    overwrite=args.overwrite,
+                )
+                _print_template_sample_report(report)
                 return
             report = export_year_monthly_tickets_and_samples(
                 settings.output_dir,
@@ -102,6 +117,22 @@ def _print_year_report(report: dict[str, Any]) -> None:
     console.print(table)
     console.print(f"Monthly tickets: {report['monthly_ticket_dir']}")
     console.print(f"Monthly sample details: {report['monthly_sample_detail_dir']}")
+
+
+def _print_template_sample_report(report: dict[str, Any]) -> None:
+    """输出按模板抽样的摘要。"""
+
+    table = Table("Template ID", "Template Name", "Month Count", "Sample")
+    for item in report["templates"]:
+        table.add_row(
+            str(item["template_id"]),
+            str(item["template_name"]),
+            str(item["month_count"]),
+            str(item["sample_count"]),
+        )
+    table.add_row("total", str(report["template_count"]), "", str(report["detail_count"]))
+    console.print(table)
+    console.print(f"Template sample details: {report['output_dir']}")
 
 
 def _print_dictionary_summary(dictionary: DataDictionary) -> None:

@@ -41,6 +41,23 @@ uv run work-order-process run --month 3
 
 默认分页大小是 `5000`，这是当前接口已验证可用的较大分页；`10000` 会触发接口 500。
 
+按模板分别抽样某个月的工单，例如从 2026 年 6 月每个模板随机抽 3 条：
+
+```powershell
+uv run work-order-process template-samples --year 2026 --month 6 --sample-size 3 --seed 202606 --overwrite
+```
+
+输出到：
+
+```text
+output/2026_06_template_sample_details/
+  2026-06_template_sample_details_raw.json
+  2026-06_template_sample_details_value_resolved.json
+  2026-06_template_sample_details_chinese.json
+```
+
+这三份文件的结构与 `output/2025_monthly_sample_details/` 中的样本详情文件一致。
+
 如果只想检查认证和工单列表接口：
 
 ```powershell

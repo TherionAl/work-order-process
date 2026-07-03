@@ -21,6 +21,7 @@ from .resolver import TicketFieldResolver, resolve_ticket_detail_values
 
 MONTHLY_TICKET_DIR_TEMPLATE = "{year}_monthly_tickets"
 MONTHLY_SAMPLE_DETAIL_DIR_TEMPLATE = "{year}_monthly_sample_details"
+TEMPLATE_SAMPLE_DETAIL_DIR_TEMPLATE = "{year}_{month:02d}_template_sample_details"
 
 
 def export_year_monthly_tickets_and_samples(
@@ -92,12 +93,146 @@ def export_year_monthly_tickets_and_samples(
     }
 
 
+def export_month_template_samples(
+    output_dir: Path,
+    dictionary: DataDictionary,
+    client: WorkOrderClient,
+    year: int,
+    month: int,
+    sample_size: int = 3,
+    seed: int = 202606,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """按工单模板分别从指定月份随机抽样，并输出三份详情 JSON。
+
+    输出结构沿用 `2025_monthly_sample_details`：raw 保留原始详情，
+    value_resolved 替换可识别 value，chinese 在此基础上中文化 key。
+    """
+
+    if sample_size < 1:
+        raise ApiError("sample_size must be greater than 0.")
+
+    month_label = build_month_label(year, month)
+    templates = client.fetch_ticket_templates()
+    if not templates:
+        raise ApiError("No ticket templates returned from /tickettemplates.")
+
+    output_detail_dir = output_dir / TEMPLATE_SAMPLE_DETAIL_DIR_TEMPLATE.format(year=year, month=month)
+    raw_path = output_detail_dir / f"{month_label}_template_sample_details_raw.json"
+    value_path = output_detail_dir / f"{month_label}_template_sample_details_value_resolved.json"
+    chinese_path = output_detail_dir / f"{month_label}_template_sample_details_chinese.json"
+    existing = [path for path in (raw_path, value_path, chinese_path) if path.exists()]
+    if existing and not overwrite:
+        raise ApiError(f"Template sample detail output already exists for {month_label}. Use --overwrite to regenerate it.")
+
+    template_reports: list[dict[str, Any]] = []
+    sampled_rows: list[dict[str, Any]] = []
+    for template in templates:
+        template_id = str(template.get("tId") or template.get("id") or "").strip()
+        if not template_id:
+            continue
+        template_name = str(template.get("ticketTemplateName") or template.get("name") or template_id)
+        count = _count_month_template_tickets(client, month_label, template_id)
+        if count == 0:
+            continue
+        rows = _sample_month_template_ticket_rows(
+            client,
+            month_label,
+            template_id,
+            count,
+            sample_size,
+            seed,
+        )
+        sampled_rows.extend(rows)
+        template_reports.append(
+            {
+                "template_id": template_id,
+                "template_name": template_name,
+                "month_count": count,
+                "sample_count": len(rows),
+                "sample_ticket_ids": _ticket_ids_from_rows(rows),
+            }
+        )
+
+    field_resolver = TicketFieldResolver(client.fetch_ticket_fields(), client.fetch_company_fields())
+    raw_details: list[dict[str, Any]] = []
+    value_details: list[dict[str, Any]] = []
+    chinese_details: list[dict[str, Any]] = []
+    failed_ids: list[str] = []
+
+    for row in sampled_rows:
+        ticket_id = str(row.get("ticketId") or "").strip()
+        if not ticket_id:
+            continue
+        raw_detail = client.fetch_ticket_detail(ticket_id)
+        if not raw_detail:
+            failed_ids.append(ticket_id)
+            continue
+        value_resolved = resolve_ticket_detail_values(raw_detail, client, field_resolver)
+        raw_details.append(raw_detail)
+        value_details.append(value_resolved)
+        chinese_details.append(dictionary.translate_record("tickets", value_resolved))
+
+    write_json(raw_path, raw_details)
+    write_json(value_path, value_details)
+    write_json(chinese_path, chinese_details)
+
+    return {
+        "month": month_label,
+        "template_count": len(template_reports),
+        "sample_target_per_template": sample_size,
+        "sample_ticket_count": len(sampled_rows),
+        "detail_count": len(raw_details),
+        "failed_count": len(failed_ids),
+        "failed_ids": failed_ids,
+        "output_dir": str(output_detail_dir),
+        "raw_output": str(raw_path),
+        "value_resolved_output": str(value_path),
+        "chinese_output": str(chinese_path),
+        "templates": template_reports,
+    }
+
+
 def build_month_label(year: int, month: int) -> str:
     """把年、月格式化为接口搜索需要的 `YYYY-MM`。"""
 
     if month < 1 or month > 12:
         raise ApiError("Month must be between 1 and 12.")
     return f"{year}-{month:02d}"
+
+
+def _count_month_template_tickets(client: WorkOrderClient, month_label: str, template_id: str) -> int:
+    """统计某个月某个模板的工单数量。"""
+
+    tickets = client.search_tickets_by_create_month_and_template(month_label, template_id, page=1, per_page=1)
+    return _safe_int(tickets.get("count"))
+
+
+def _sample_month_template_ticket_rows(
+    client: WorkOrderClient,
+    month_label: str,
+    template_id: str,
+    count: int,
+    sample_size: int,
+    seed: int,
+) -> list[dict[str, Any]]:
+    """从某个月某个模板中随机取工单列表行。"""
+
+    sample_count = min(sample_size, count)
+    rng = random.Random(f"{seed}:{month_label}:{template_id}")
+    offsets = sorted(rng.sample(range(count), sample_count))
+    rows: list[dict[str, Any]] = []
+    for offset in offsets:
+        tickets = client.search_tickets_by_create_month_and_template(
+            month_label,
+            template_id,
+            page=offset + 1,
+            per_page=1,
+        )
+        page_rows = _extract_search_rows(tickets.get("results"))
+        if page_rows:
+            rows.append(page_rows[0])
+    return rows
 
 
 def fetch_month_ticket_rows(

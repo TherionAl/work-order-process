@@ -84,3 +84,37 @@ uv run work-order-process run --month 3
 
 抽样默认固定随机种子为 `2025`。如果需要更换每月 3 条样本，可传入新的 `--seed`。
 搜索接口分页默认使用 `per_page=5000`；当前已验证 `10000` 会返回 500，不作为默认值。
+
+## 按模板抽样
+
+如果需要从某个月中按工单模板分别抽样，使用：
+
+```powershell
+uv run work-order-process template-samples --year 2026 --month 6 --sample-size 3 --seed 202606 --overwrite
+```
+
+该命令会先调用 `/tickettemplates` 获取模板列表，再用以下搜索条件逐个模板统计和抽样：
+
+```text
+GET /tickets/search.json?query=createDT:2026-06 ticketTemplateId:<模板ID>
+```
+
+2026 年 6 月本次已抽取到 9 个有数据的模板，每个模板 3 条，共 27 条详情：
+
+| 模板 ID | 模板名称 | 2026-06 工单数 | 抽样数 |
+|---:|---|---:|---:|
+| 4 | 服务请求单 | 40482 | 3 |
+| 12 | 项目变动单 | 232 | 3 |
+| 30 | 需求单 | 512 | 3 |
+| 50 | 任务下发单 | 2284 | 3 |
+| 56 | 非税票据运维事件单 | 2001 | 3 |
+| 60 | 【福建】专用模板 | 278 | 3 |
+| 74 | 服务器监控模板 | 16 | 3 |
+| 78 | 吉林工单 | 3528 | 3 |
+| 104 | 医疗智慧财务事件单 | 285 | 3 |
+
+输出文件：
+
+- `output/2026_06_template_sample_details/2026-06_template_sample_details_raw.json`
+- `output/2026_06_template_sample_details/2026-06_template_sample_details_value_resolved.json`
+- `output/2026_06_template_sample_details/2026-06_template_sample_details_chinese.json`

@@ -186,6 +186,34 @@ class WorkOrderClient:
             raise ApiError(f"Unexpected ticket search response: {body}")
         return tickets
 
+    def search_tickets_by_create_month_and_template(
+        self,
+        month_label: str,
+        template_id: str,
+        page: int = 1,
+        per_page: int = 1000,
+    ) -> dict[str, Any]:
+        """按创建月份和工单模板搜索工单列表。
+
+        搜索接口支持 `ticketTemplateId:<模板ID>` 条件。这个方法用于按模板分别抽样，
+        避免为了分组而拉取整月所有工单详情。
+        """
+
+        body = self._json_get(
+            "/tickets/search.json",
+            {
+                "query": f"createDT:{month_label} ticketTemplateId:{template_id}",
+                "sort_by": "createDT",
+                "sort_order": "asc",
+                "page": page,
+                "per_page": per_page,
+            },
+        )
+        tickets = body.get("tickets") if isinstance(body, dict) else None
+        if not isinstance(tickets, dict):
+            raise ApiError(f"Unexpected ticket template search response: {body}")
+        return tickets
+
     def fetch_support_detail(self, support_id: str) -> dict | None:
         """按客服 ID 读取客服详情，用于替换 servicerUserId/createrId 等字段。"""
 
@@ -212,6 +240,18 @@ class WorkOrderClient:
         if isinstance(template, list):
             return template[0] if template else None
         return template if isinstance(template, dict) else None
+
+    def fetch_ticket_templates(self) -> list[dict[str, Any]]:
+        """读取全部工单模板列表，用于按模板分别抽样。"""
+
+        body = self._json_get_or_list("/tickettemplates")
+        if isinstance(body, dict):
+            templates = body.get("tickettemplates") or body.get("ticket_templates") or body.get("data") or []
+            if isinstance(templates, list):
+                return [item for item in templates if isinstance(item, dict)]
+        if isinstance(body, list):
+            return [item for item in body if isinstance(item, dict)]
+        return []
 
     def fetch_ticket_fields(self) -> list[dict[str, Any]]:
         """读取工单所有字段定义。
