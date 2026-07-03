@@ -64,6 +64,37 @@ output/2026_06_template_sample_details/
 uv run work-order-process probe
 ```
 
+## MySQL 入库
+
+本机 MySQL 配置写到 `.env`，不要把真实密码提交进 Git：
+
+```dotenv
+WORKORDER_MYSQL_HOST=127.0.0.1
+WORKORDER_MYSQL_PORT=3306
+WORKORDER_MYSQL_USER=root
+WORKORDER_MYSQL_PASSWORD=你的本机MySQL密码
+WORKORDER_MYSQL_DATABASE=work_order
+```
+
+初始化数据库和两张表：
+
+```powershell
+uv run work-order-process mysql-init
+```
+
+拉取单条工单详情并写入 MySQL：
+
+```powershell
+uv run work-order-process mysql-import-ticket --ticket-id 22256891
+```
+
+当前只建两张表：
+
+- `ticket_detail_main`：一条工单一行，保存顶层字段。
+- `ticket_detail_custom_fields`：一条自定义字段一行，保存 `custom_fields` 动态字段。
+
+详细表结构和更新策略见 `docs/mysql_schema.md`。
+
 ## 输出
 
 月度工单合集：

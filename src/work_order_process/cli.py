@@ -16,6 +16,7 @@ from rich.table import Table
 from .api import ApiError, WorkOrderClient
 from .config import load_settings
 from .dictionary import DataDictionary
+from .mysql_storage import ensure_mysql_schema, import_ticket_detail_to_mysql
 from .monthly_export import export_month_template_samples, export_year_monthly_tickets_and_samples
 
 
@@ -28,11 +29,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Export 2025 monthly work-order data.")
     parser.add_argument(
         "command",
-        choices=["run", "template-samples", "probe", "dictionary"],
+        choices=["run", "template-samples", "mysql-init", "mysql-import-ticket", "probe", "dictionary"],
         nargs="?",
         default="run",
-        help="run: 导出月度工单合集和每月 3 条详情；template-samples: 按模板分别抽样；probe: 探测认证和接口。",
+        help="run: 导出月度工单合集和每月 3 条详情；template-samples: 按模板分别抽样；mysql-init/mysql-import-ticket: MySQL 操作。",
     )
+    parser.add_argument("--ticket-id", default=None, help="MySQL 入库时指定单条工单 ID。")
     parser.add_argument("--year", type=int, default=2025, help="需要导出的年份，默认 2025。")
     parser.add_argument("--month", type=int, default=None, help="只导出指定月份，取值 1-12；默认导出全年。")
     parser.add_argument("--sample-size", type=int, default=3, help="每个月抽取的工单详情数量，默认 3。")
@@ -52,9 +54,20 @@ def main() -> None:
         _print_dictionary_summary(dictionary)
         return
 
+    if args.command == "mysql-init":
+        ensure_mysql_schema(settings.mysql)
+        console.print(f"MySQL schema is ready: {settings.mysql.host}:{settings.mysql.port}/{settings.mysql.database}")
+        return
+
     try:
         with WorkOrderClient(settings) as client:
             client.authenticate()
+            if args.command == "mysql-import-ticket":
+                if not args.ticket_id:
+                    raise ApiError("Please pass --ticket-id for mysql-import-ticket.")
+                report = import_ticket_detail_to_mysql(settings.mysql, dictionary, client, args.ticket_id)
+                _print_mysql_import_report(report)
+                return
             if args.command == "probe":
                 _probe(client)
                 return
@@ -133,6 +146,15 @@ def _print_template_sample_report(report: dict[str, Any]) -> None:
     table.add_row("total", str(report["template_count"]), "", str(report["detail_count"]))
     console.print(table)
     console.print(f"Template sample details: {report['output_dir']}")
+
+
+def _print_mysql_import_report(report: dict[str, Any]) -> None:
+    """输出 MySQL 单条工单入库摘要。"""
+
+    table = Table("Metric", "Value")
+    for key, value in report.items():
+        table.add_row(str(key), str(value))
+    console.print(table)
 
 
 def _print_dictionary_summary(dictionary: DataDictionary) -> None:

@@ -61,6 +61,17 @@ class EndpointConfig:
 
 
 @dataclass(frozen=True)
+class MySQLConfig:
+    """本机 MySQL 连接配置。"""
+
+    host: str
+    port: int
+    user: str
+    password: str
+    database: str
+
+
+@dataclass(frozen=True)
 class Settings:
     """运行时完整配置对象。"""
 
@@ -74,6 +85,7 @@ class Settings:
     ticket_since: str
     sample_size: int
     endpoint: EndpointConfig
+    mysql: MySQLConfig
 
 
 def load_settings() -> Settings:
@@ -128,4 +140,11 @@ def load_settings() -> Settings:
         ticket_since=os.getenv("WORKORDER_TICKET_SINCE", "2025-01-01"),
         sample_size=int(os.getenv("WORKORDER_SAMPLE_SIZE", "10")),
         endpoint=endpoint,
+        mysql=MySQLConfig(
+            host=os.getenv("WORKORDER_MYSQL_HOST", "127.0.0.1"),
+            port=int(os.getenv("WORKORDER_MYSQL_PORT", "3306")),
+            user=os.getenv("WORKORDER_MYSQL_USER", "root"),
+            password=os.getenv("WORKORDER_MYSQL_PASSWORD", ""),
+            database=os.getenv("WORKORDER_MYSQL_DATABASE", "work_order"),
+        ),
     )
