@@ -1,6 +1,8 @@
 # 2025 年月度工单导出说明
 
-更新时间：2026-07-03
+更新时间：2026-07-06
+
+本文档只说明工单接口、字段解析、value 替换和样本导出逻辑。MySQL 最终 5 表结构、分区设计和同步策略见 `docs/mysql_schema.md`，当前总体进度见 `docs/development_progress.md`。
 
 ## 当前输出目标
 
@@ -51,6 +53,22 @@ https://workorder.bosssoft.com.cn/api/v1
 | `custom_fields` | 把 `field_xxx` 替换为字段中文名，并尽量替换选项 value。 |
 | `record_serviceruserid` | 自定义字段中的历史操作人，按客服 ID 替换为客服姓名。 |
 | `nodeFieldIntoTime` | 秒级 Unix 时间戳转为可读时间。 |
+
+## 结构化入库对应关系
+
+工单详情结构化时拆成两类数据：
+
+1. 顶层字段进入 `ticket_detail_main`
+   - 例如 `ticketId`、`subject`、`ticketStatus`、`ticketTemplateId`、`createDT`、`updateDT`。
+   - 高频分析维度后续也会冗余到主表，例如地区、产品线、问题类型、当前节点、部门等。
+
+2. `custom_fields` 进入 `ticket_detail_custom_fields`
+   - 一条自定义字段一行。
+   - `raw.custom_fields[].key` 作为 `field_key`。
+   - value 替换后的 `custom_fields[].key` 作为 `field_name`。
+   - value 替换后的 `custom_fields[].value` 作为 `field_value` 或 `field_value_json`。
+
+不再单独建设 `ticket_detail_raw` 表；原始 JSON 文件可以保留在本地用于备查。
 
 本地枚举替换：
 
