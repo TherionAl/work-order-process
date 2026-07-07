@@ -1,245 +1,72 @@
-# MySQL 数据库设计
+# MySQL 数据库设计说明
 
-更新时间：2026-07-06
+本文档对应当前组合版代码中的 MySQL 实现，主要来源是：
 
-## 设计目标
+- `src/work_order_process/mysql_storage.py`
+- `src/work_order_process/resolver.py`
+- `src/work_order_process/structured_ticket.py`
+- `src/work_order_process/structured_entities.py`
 
-项目后续计划把工单、客户、联系人统一写入本机 MySQL，作为专门存取工单数据的数据仓库。
+当前版本已经不是早期“两张基础表”的设计，而是面向长期同步和统计分析的 5 表数据仓库模型。
 
-建议数据库：
+## 1. 总体结构
+
+默认数据库名：
 
 ```text
-work_order
+work_order_datalake
 ```
 
-最终建议维护 5 张表：
+当前创建 5 张表：
 
 ```text
-ticket_detail_main
+work_order_datalake
+├── ticket_detail_main              工单详情主表，按 create_dt 月度分区
+├── ticket_detail_custom_fields     工单自定义字段明细表，按 create_dt 月度分区
+├── customers                       客户/公司统一表
+├── contacts                        联系人/公司联系人统一表
+└── sync_task_log                   同步任务日志表
+```
+
+设计重点：
+
+1. 工单数据量最大，`ticket_detail_main` 和 `ticket_detail_custom_fields` 按月分区。
+2. 分区表不使用 MySQL 外键，依靠程序逻辑和索引保证关联。
+3. 工单主表保留原始 ID，同时补充可读名称字段。
+4. 高频分析维度冗余到 `ticket_detail_main`，动态字段保留到 `ticket_detail_custom_fields`。
+5. 客户/公司统一进入 `customers`。
+6. 联系人/公司联系人统一进入 `contacts`。
+7. 每次同步写入 `sync_task_log`，便于断点续跑、排查失败和统计耗时。
+
+## 2. 表关系
+
+逻辑关系如下：
+
+```text
+customers.customer_id
+        ↑
+        │ contacts.customer_id
+contacts.contact_id
+        ↑
+        │ ticket_detail_main.cust_user_id
+ticket_detail_main.ticket_id + create_dt
+        ↑
+        │ ticket_detail_custom_fields.ticket_id + create_dt
 ticket_detail_custom_fields
-customers
-contacts
-sync_task_log
+
+sync_task_log 独立记录同步任务执行情况
 ```
 
-当前代码已经实现了 `ticket_detail_main` 和 `ticket_detail_custom_fields` 的基础版建表和单条工单入库；本文档记录的是后续应升级到的目标设计。
+注意：
 
-## 总体原则
+- `ticket_detail_main.cust_user_id` 逻辑关联 `contacts.contact_id`。
+- `contacts.customer_id` 逻辑关联 `customers.customer_id`。
+- `ticket_detail_custom_fields.ticket_id` 逻辑关联 `ticket_detail_main.ticket_id`。
+- 工单两张分区表不创建外键。
 
-1. 工单数据量最大，工单两张表都按月分区。
-2. 客户/公司统一进 `customers`。
-3. 联系人/公司联系人统一进 `contacts`。
-4. 不建 `ticket_detail_raw`。
-5. 不单独建附件表，附件类字段以 JSON 或文本保存在对应业务表。
-6. 分区表不使用 MySQL 外键，由程序逻辑和索引保证关联。
-7. 高频分析维度冗余到 `ticket_detail_main`，低频动态字段保留在 `ticket_detail_custom_fields`。
+## 3. 分区方案
 
-## 表 1：ticket_detail_main
-
-定位：
-
-- 工单唯一主表。
-- 一条工单一行。
-- 保存工单详情顶层字段。
-- 冗余高频分析维度，便于按月、地区、模板、节点、客服等维度统计。
-
-建议按 `create_dt` 月度分区。由于 MySQL 分区表要求所有唯一键都包含分区字段，主键建议包含 `create_dt`。
-
-建议主键：
-
-```sql
-PRIMARY KEY (ticket_id, create_dt)
-```
-
-建议核心字段：
-
-```text
-ticket_id
-subject
-descript
-cust_user_id
-ticket_type
-priority_level
-ticket_status
-ticket_source
-ticket_template_id
-create_dt
-update_dt
-solve_dt
-open_dt
-close_dt
-source_updated_at
-create_year
-create_month
-create_month_label
-last_sync_at
-sync_status
-sync_error
-```
-
-建议人员/组织字段：
-
-```text
-contact_name
-customer_id
-customer_name
-servicer_user_id
-servicer_name
-servicer_group_id
-servicer_group_name
-creater_id
-creater_name
-```
-
-建议高频分析维度字段：
-
-```text
-province
-city
-district
-region_text
-product_line
-module_name
-problem_type
-customer_type
-customer_industry
-department_id
-department_name
-current_node_name
-current_node_status
-current_node_started_at
-current_node_duration_seconds
-```
-
-字段中文说明：
-
-| 字段名 | 中文说明 | 备注 |
-|---|---|---|
-| `ticket_id` | 工单 ID | 工单唯一标识。 |
-| `subject` | 工单标题 | 顶层字段 `subject`。 |
-| `descript` | 工单描述 | 顶层字段 `descript`。 |
-| `cust_user_id` | 联系人 ID | 对应接口字段 `custUserId`，逻辑关联 `contacts.contact_id`。 |
-| `contact_name` | 联系人姓名 | 从联系人接口或 value 替换结果补充。 |
-| `customer_id` | 客户/公司 ID | 由联系人或公司信息补充，逻辑关联 `customers.customer_id`。 |
-| `customer_name` | 客户/公司名称 | 高频查询维度。 |
-| `ticket_type` | 工单类型 | 例如问题、事务、故障、任务。 |
-| `priority_level` | 优先级 | 例如低、正常、高、紧急。 |
-| `ticket_status` | 工单状态 | 例如新建、已解决、已关闭。 |
-| `ticket_source` | 工单来源 | 来源枚举暂保留接口值或解析值。 |
-| `ticket_template_id` | 工单模板 | 可存模板 ID 或已解析模板名称，后续建议拆 ID/名称。 |
-| `create_dt` | 工单创建时间 | 分区字段。 |
-| `update_dt` | 工单修改时间 | 接口顶层字段。 |
-| `solve_dt` | 工单解决时间 | 接口顶层字段。 |
-| `open_dt` | 工单开启时间 | 接口顶层字段。 |
-| `close_dt` | 工单关闭时间 | 接口顶层字段。 |
-| `source_updated_at` | 来源更新时间 | 来自接口 `updateDT`，用于判断是否需要重刷。 |
-| `create_year` | 创建年份 | 从 `create_dt` 派生。 |
-| `create_month` | 创建月份 | 从 `create_dt` 派生。 |
-| `create_month_label` | 创建年月 | 格式 `YYYY-MM`，用于按月查询。 |
-| `servicer_user_id` | 客服 ID | 顶层字段 `servicerUserId`。 |
-| `servicer_name` | 客服姓名 | 从客服详情接口补充。 |
-| `servicer_group_id` | 客服组 ID | 顶层字段 `servicerGroupId`。 |
-| `servicer_group_name` | 客服组名称 | 从客服组详情接口补充。 |
-| `creater_id` | 创建人 ID | 顶层字段 `createrId`。 |
-| `creater_name` | 创建人姓名 | 从客服或联系人接口补充。 |
-| `province` | 省份 | 高频分析维度，可从客户或自定义字段抽取。 |
-| `city` | 城市 | 高频分析维度。 |
-| `district` | 区县 | 高频分析维度。 |
-| `region_text` | 地区文本 | 无法拆省市区时保留原始地区文本。 |
-| `product_line` | 产品线 | 从自定义字段抽取。 |
-| `module_name` | 模块名称 | 从自定义字段抽取。 |
-| `problem_type` | 问题类型 | 从自定义字段抽取。 |
-| `customer_type` | 客户性质/类型 | 从公司字段或自定义字段抽取。 |
-| `customer_industry` | 客户行业 | 后续客户分析维度。 |
-| `department_id` | 内部部门 ID | 后续内部部门映射使用。 |
-| `department_name` | 内部部门名称 | 后续按部门统计使用。 |
-| `current_node_name` | 当前节点名称 | 从当前流程节点字段解析。 |
-| `current_node_status` | 当前节点状态 | 从当前流程节点值解析。 |
-| `current_node_started_at` | 当前节点进入时间 | 由 `nodeFieldIntoTime` 转换。 |
-| `current_node_duration_seconds` | 当前节点停留秒数 | 可由当前时间或流转数据计算。 |
-| `last_sync_at` | 最近同步时间 | 本地同步时间。 |
-| `sync_status` | 同步状态 | 例如 `success`、`failed`、`skipped`。 |
-| `sync_error` | 同步错误信息 | 记录最近一次同步错误摘要。 |
-
-建议索引：
-
-```sql
-KEY idx_ticket_id (ticket_id),
-KEY idx_create_month_label (create_month_label),
-KEY idx_source_updated_at (source_updated_at),
-KEY idx_last_sync_at (last_sync_at),
-KEY idx_month_template (create_month_label, ticket_template_id),
-KEY idx_month_status (create_month_label, ticket_status),
-KEY idx_month_region (create_month_label, province, city, district),
-KEY idx_month_problem_type (create_month_label, problem_type),
-KEY idx_month_department (create_month_label, department_id)
-```
-
-## 表 2：ticket_detail_custom_fields
-
-定位：
-
-- 工单自定义字段明细表。
-- 一条 `custom_fields` 字段一行。
-- 用多行承接动态字段，避免形成超宽表。
-
-这张表会比主表大很多，也建议按 `create_dt` 月度分区。
-
-建议主键：
-
-```sql
-PRIMARY KEY (ticket_id, field_order, create_dt)
-```
-
-建议字段：
-
-```text
-ticket_id
-ticket_template_id
-create_dt
-create_year
-create_month
-create_month_label
-field_order
-field_key
-field_name
-field_value
-field_value_json
-field_value_type
-last_sync_at
-```
-
-字段中文说明：
-
-| 字段名 | 中文说明 | 备注 |
-|---|---|---|
-| `ticket_id` | 工单 ID | 逻辑关联 `ticket_detail_main.ticket_id`。 |
-| `ticket_template_id` | 工单模板 | 冗余字段，便于按模板查自定义字段。 |
-| `create_dt` | 工单创建时间 | 分区字段，来自主表。 |
-| `create_year` | 创建年份 | 从 `create_dt` 派生。 |
-| `create_month` | 创建月份 | 从 `create_dt` 派生。 |
-| `create_month_label` | 创建年月 | 格式 `YYYY-MM`。 |
-| `field_order` | 字段顺序 | `custom_fields` 中的顺序，从 1 开始。 |
-| `field_key` | 原始字段 key | 例如 `field_1212`、`record_serviceruserid`。 |
-| `field_name` | 中文字段名 | 由工单字段接口或解析逻辑得到。 |
-| `field_value` | 字段值文本 | 普通值直接保存；数组/对象也可转 JSON 字符串保存。 |
-| `field_value_json` | 字段值 JSON | 数组或对象原结构。 |
-| `field_value_type` | 字段值类型 | 例如 `str`、`list`、`dict`、`null`。 |
-| `last_sync_at` | 最近同步时间 | 本地同步时间。 |
-
-建议索引：
-
-```sql
-KEY idx_ticket_id (ticket_id),
-KEY idx_month_field (create_month_label, field_name),
-KEY idx_month_template_field (create_month_label, ticket_template_id, field_name),
-KEY idx_field_name (field_name),
-KEY idx_field_key (field_key)
-```
-
-## 工单表分区方案
-
-`ticket_detail_main` 和 `ticket_detail_custom_fields` 建议使用同一套按月分区方案：
+当前工单两张表使用同一套分区方案：
 
 ```sql
 PARTITION BY RANGE COLUMNS(create_dt) (
@@ -255,66 +82,225 @@ PARTITION BY RANGE COLUMNS(create_dt) (
   PARTITION p202510 VALUES LESS THAN ('2025-11-01'),
   PARTITION p202511 VALUES LESS THAN ('2025-12-01'),
   PARTITION p202512 VALUES LESS THAN ('2026-01-01'),
+  PARTITION p202601 VALUES LESS THAN ('2026-02-01'),
+  PARTITION p202602 VALUES LESS THAN ('2026-03-01'),
+  PARTITION p202603 VALUES LESS THAN ('2026-04-01'),
+  PARTITION p202604 VALUES LESS THAN ('2026-05-01'),
+  PARTITION p202605 VALUES LESS THAN ('2026-06-01'),
+  PARTITION p202606 VALUES LESS THAN ('2026-07-01'),
+  PARTITION p202607 VALUES LESS THAN ('2026-08-01'),
+  PARTITION p202608 VALUES LESS THAN ('2026-09-01'),
+  PARTITION p202609 VALUES LESS THAN ('2026-10-01'),
+  PARTITION p202610 VALUES LESS THAN ('2026-11-01'),
+  PARTITION p202611 VALUES LESS THAN ('2026-12-01'),
+  PARTITION p202612 VALUES LESS THAN ('2027-01-01'),
+  PARTITION pmax    VALUES LESS THAN (MAXVALUE)
+)
+```
+
+后续月份通过命令创建：
+
+```powershell
+uv run work_order_process_v1.1 mysql-add-partitions --months-ahead 6
+```
+
+底层逻辑是重组 `pmax`：
+
+```sql
+ALTER TABLE ticket_detail_main
+REORGANIZE PARTITION pmax INTO (
+  PARTITION pYYYYMM VALUES LESS THAN ('YYYY-MM-01'),
   PARTITION pmax VALUES LESS THAN (MAXVALUE)
 );
 ```
 
-说明：
+自定义字段表同步执行同样的分区重组。
 
-- 2025 年是历史备份数据，按月份导入和查询最自然。
-- `pmax` 用于兜底接收 2026 年及以后的数据。
-- 如果后续要持续同步 2026 年数据，可以继续补充 2026 年月度分区。
+## 4. 表 1：ticket_detail_main
 
-## 表 3：customers
+### 4.1 用途
 
-定位：
+`ticket_detail_main` 是工单详情主表，一条工单一行。它保存工单详情接口返回的顶层字段、解析后的人员/模板名称、同步状态，以及从自定义字段抽取出的高频分析维度。
 
-- 客户/公司统一表。
-- 接口里的“客户”和“公司”本质是同一类实体。
+主键：
 
-命名统一：
-
-```text
-客户 = 公司 = customers
+```sql
+PRIMARY KEY (ticket_id, create_dt)
 ```
 
-建议普通表即可，暂不分区。
+使用 `create_dt` 进入主键，是因为 MySQL 分区表要求所有唯一键包含分区字段。
 
-建议字段：
+### 4.2 主要字段
 
-```text
-customer_id
-customer_name
-customer_type
-province
-city
-district
-address
-source_flags
-source_updated_at
-last_sync_at
-created_at
-updated_at
-```
-
-字段中文说明：
-
-| 字段名 | 中文说明 | 备注 |
+| 字段名 | 中文说明 | 来源/用途 |
 |---|---|---|
-| `customer_id` | 客户/公司 ID | 客户和公司统一后的主键。 |
-| `customer_name` | 客户/公司名称 | 主要查询字段。 |
-| `customer_type` | 客户性质/类型 | 可由公司字段或接口字段解析。 |
-| `province` | 省份 | 地区维度。 |
-| `city` | 城市 | 地区维度。 |
-| `district` | 区县 | 地区维度。 |
-| `address` | 地址 | 客户/公司地址。 |
-| `source_flags` | 来源标记 | 例如 `customer,company`，表示来自哪些接口。 |
-| `source_updated_at` | 来源更新时间 | 接口返回的更新时间，如有。 |
-| `last_sync_at` | 最近同步时间 | 本地最近同步时间。 |
-| `created_at` | 入库时间 | 数据库记录创建时间。 |
-| `updated_at` | 更新时间 | 数据库记录更新时间。 |
+| `ticket_id` | 工单 ID | API `ticketId`，主键之一。 |
+| `subject` | 工单标题 | API `subject`。 |
+| `descript` | 工单描述 | API `descript`。 |
+| `cust_user_id` | 联系人 ID | API `custUserId`，保留原始 ID。 |
+| `cust_user_name` | 联系人姓名 | resolver 调联系人详情接口补充。 |
+| `servicer_user_id` | 客服 ID | API `servicerUserId`，保留原始 ID。 |
+| `servicer_user_name` | 客服姓名 | resolver 调客服详情接口补充。 |
+| `cc_user_id_list` | 抄送客服 ID/名称列表 | API `ccUserIdList`，解析后保存。 |
+| `ticket_type` | 工单类型 | API `ticketType`，枚举值解析。 |
+| `priority_level` | 优先级 | API `priorityLevel`，枚举值解析。 |
+| `ticket_status` | 工单状态 | API `ticketStatus`，枚举值解析。 |
+| `create_dt` | 创建时间 | API `createDT`，分区字段。 |
+| `source_updated_at` | 来源更新时间 | API `updateDT`，用于增量判断。 |
+| `solve_dt` | 解决时间 | API `solveDT`。 |
+| `wait_dt` | 等待时间 | API `waitDT`。 |
+| `open_dt` | 开启时间 | API `openDT`。 |
+| `close_dt` | 关闭时间 | API `closeDT`。 |
+| `servicer_group_id` | 客服组 ID | API `servicerGroupId`。 |
+| `servicer_group_name` | 客服组名称 | resolver 调客服组详情接口补充。 |
+| `creater_id` | 创建人 ID | API `createrId`。 |
+| `creater_name` | 创建人姓名 | resolver 调客服详情接口补充。 |
+| `ticket_template_id` | 工单模板 ID | API `ticketTemplateId`。 |
+| `ticket_template_name` | 工单模板名称 | resolver 调模板详情接口补充。 |
+| `current_node_field` | 当前流程节点字段 | API `currentNodeField`。 |
+| `current_node_field_value` | 当前流程节点字段值 | API `currentNodeFieldValue`。 |
+| `node_field_into_time` | 进入节点时间 | API `nodeFieldIntoTime`，秒级时间戳解析。 |
+| `descript_attachments` | 描述附件 | JSON 字段。 |
+| `create_year` | 创建年份 | 从 `create_dt` 派生。 |
+| `create_month` | 创建月份 | 从 `create_dt` 派生。 |
+| `create_month_label` | 创建年月 | `YYYY-MM`，从 `create_dt` 派生。 |
+| `last_sync_at` | 最近同步时间 | 程序写入。 |
+| `sync_status` | 同步状态 | `success`、`skipped`、`failed`。 |
+| `sync_error` | 同步错误 | 失败时记录。 |
 
-建议索引：
+### 4.3 高频分析维度
+
+以下字段由 resolver 从 `custom_fields` 或当前节点字段中抽取：
+
+| 字段名 | 中文说明 | 来源/用途 |
+|---|---|---|
+| `province` | 省份 | 自定义字段中的省份/地区类字段。 |
+| `city` | 城市 | 自定义字段中的城市/地区类字段。 |
+| `district` | 区县 | 自定义字段中的区县/地区类字段。 |
+| `region_text` | 地区文本 | 原始地区文本。 |
+| `product_line` | 产品线 | 自定义字段抽取。 |
+| `module_name` | 模块名称 | 自定义字段抽取。 |
+| `problem_type` | 问题类型 | 自定义字段抽取。 |
+| `customer_type` | 客户类型 | 自定义字段或公司字段抽取。 |
+| `customer_industry` | 客户行业 | 自定义字段或公司字段抽取。 |
+| `department_id` | 部门 ID | 后续可从人员或字段补充。 |
+| `department_name` | 部门名称 | 后续可从人员或字段补充。 |
+| `current_node_name` | 当前节点名称 | 当前流程节点字段解析。 |
+| `current_node_status` | 当前节点状态 | 当前流程节点字段解析。 |
+| `current_node_started_at` | 当前节点进入时间 | 来自 `nodeFieldIntoTime`。 |
+| `current_node_duration_seconds` | 当前节点停留秒数 | 后续可计算。 |
+
+### 4.4 索引
+
+当前主表索引：
+
+```sql
+PRIMARY KEY (ticket_id, create_dt),
+KEY idx_create_month_label (create_month_label),
+KEY idx_source_updated_at (source_updated_at),
+KEY idx_last_sync_at (last_sync_at),
+KEY idx_ticket_template_id (ticket_template_id),
+KEY idx_ticket_status (ticket_status),
+KEY idx_month_template (create_month_label, ticket_template_id),
+KEY idx_month_status (create_month_label, ticket_status),
+KEY idx_month_region (create_month_label, province, city, district),
+KEY idx_month_problem_type (create_month_label, problem_type),
+KEY idx_month_department (create_month_label, department_id)
+```
+
+查询建议：
+
+- 月度查询优先用 `create_dt` 范围，便于分区裁剪。
+- 报表统计可用 `create_month_label`。
+- 按模板、状态、地区、问题类型统计时使用复合索引。
+
+## 5. 表 2：ticket_detail_custom_fields
+
+### 5.1 用途
+
+`ticket_detail_custom_fields` 保存工单详情中的 `custom_fields` 数组。一条自定义字段一行，用来承接不同工单模板下差异很大的动态字段。
+
+主键：
+
+```sql
+PRIMARY KEY (id, create_dt)
+```
+
+唯一键：
+
+```sql
+UNIQUE KEY uk_ticket_field_order (ticket_id, field_order, create_dt)
+```
+
+### 5.2 字段
+
+| 字段名 | 中文说明 | 来源/用途 |
+|---|---|---|
+| `id` | 自增主键 | 分区表主键组成之一。 |
+| `ticket_id` | 工单 ID | 逻辑关联主表。 |
+| `ticket_template_id` | 工单模板 ID | 冗余，便于按模板查字段。 |
+| `create_dt` | 工单创建时间 | 分区字段，来自主表。 |
+| `create_year` | 创建年份 | 从 `create_dt` 派生。 |
+| `create_month` | 创建月份 | 从 `create_dt` 派生。 |
+| `create_month_label` | 创建年月 | `YYYY-MM`。 |
+| `field_order` | 字段顺序 | `custom_fields` 数组顺序，从 1 开始。 |
+| `field_key` | 原始字段 key | 例如 `field_1212`。 |
+| `field_name` | 字段中文名 | resolver 根据字段接口解析。 |
+| `field_value` | 字段值文本 | 普通值或 JSON 字符串。 |
+| `field_value_json` | 字段值 JSON | 数组/对象时保存原结构。 |
+| `field_value_type` | 字段值类型 | `str`、`list`、`dict`、`null` 等。 |
+| `last_sync_at` | 最近同步时间 | 程序写入。 |
+| `created_at` | 入库时间 | MySQL 默认值。 |
+| `updated_at` | 更新时间 | MySQL 自动更新。 |
+
+### 5.3 索引
+
+```sql
+PRIMARY KEY (id, create_dt),
+UNIQUE KEY uk_ticket_field_order (ticket_id, field_order, create_dt),
+KEY idx_ticket_id (ticket_id),
+KEY idx_month_field (create_month_label, field_name),
+KEY idx_month_template_field (create_month_label, ticket_template_id, field_name),
+KEY idx_field_name (field_name),
+KEY idx_field_key (field_key)
+```
+
+设计说明：
+
+- `ticket_id + field_order + create_dt` 保证同一工单同一字段顺序唯一。
+- 自定义字段采用整票重刷策略，避免字段新增、删除、顺序变化后旧字段残留。
+- `create_dt` 冗余到明细表，避免月度统计时频繁 join 主表。
+
+## 6. 表 3：customers
+
+### 6.1 用途
+
+`customers` 合并客户和公司两类实体。因为业务上客户、公司都可以作为工单关联主体，合并后更便于统计。
+
+主键：
+
+```sql
+PRIMARY KEY (customer_id)
+```
+
+### 6.2 字段
+
+| 字段名 | 中文说明 | 来源/用途 |
+|---|---|---|
+| `customer_id` | 客户/公司 ID | API 主键。 |
+| `customer_name` | 客户/公司名称 | 主要展示字段。 |
+| `customer_type` | 客户类型 | 公司字段或接口字段。 |
+| `province` | 省份 | 地址/地区字段。 |
+| `city` | 城市 | 地址/地区字段。 |
+| `district` | 区县 | 地址/地区字段。 |
+| `address` | 地址 | API 地址字段。 |
+| `source_flags` | 来源标记 | `customer`、`company` 或组合。 |
+| `source_updated_at` | 来源更新时间 | API 更新时间。 |
+| `last_sync_at` | 最近同步时间 | 程序写入。 |
+| `created_at` | 入库时间 | MySQL 默认值。 |
+| `updated_at` | 更新时间 | MySQL 自动更新。 |
+
+### 6.3 索引
 
 ```sql
 PRIMARY KEY (customer_id),
@@ -324,62 +310,39 @@ KEY idx_region (province, city, district),
 KEY idx_source_flags (source_flags)
 ```
 
-## 表 4：contacts
+## 7. 表 4：contacts
 
-定位：
+### 7.1 用途
 
-- 联系人/公司联系人统一表。
-- 接口里的“联系人”和“公司联系人”本质是同一类实体。
+`contacts` 合并联系人和公司联系人。工单主表的 `cust_user_id` 逻辑关联到 `contacts.contact_id`。
 
-命名统一：
+主键：
 
-```text
-联系人 = 公司联系人 = contacts
+```sql
+PRIMARY KEY (contact_id)
 ```
 
-建议普通表即可，暂不分区。
+### 7.2 字段
 
-建议字段：
-
-```text
-contact_id
-contact_name
-phone
-email
-qq
-wechat
-customer_id
-customer_name
-department_name
-position_name
-source_flags
-source_updated_at
-last_sync_at
-created_at
-updated_at
-```
-
-字段中文说明：
-
-| 字段名 | 中文说明 | 备注 |
+| 字段名 | 中文说明 | 来源/用途 |
 |---|---|---|
-| `contact_id` | 联系人 ID | 联系人和公司联系人统一后的主键。 |
-| `contact_name` | 联系人姓名 | 主要查询字段。 |
+| `contact_id` | 联系人 ID | API 主键。 |
+| `contact_name` | 联系人姓名 | 主要展示字段。 |
 | `phone` | 手机号 | 联系方式。 |
 | `email` | 邮箱 | 联系方式。 |
 | `qq` | QQ | 联系方式。 |
 | `wechat` | 微信 | 联系方式。 |
-| `customer_id` | 所属客户/公司 ID | 逻辑关联 `customers.customer_id`。 |
-| `customer_name` | 所属客户/公司名称 | 冗余字段，便于查看。 |
-| `department_name` | 联系人部门 | 客户内部部门，如接口可返回。 |
-| `position_name` | 联系人职位 | 客户联系人职位。 |
-| `source_flags` | 来源标记 | 例如 `contact,company_contact`。 |
-| `source_updated_at` | 来源更新时间 | 接口返回的更新时间，如有。 |
-| `last_sync_at` | 最近同步时间 | 本地最近同步时间。 |
-| `created_at` | 入库时间 | 数据库记录创建时间。 |
-| `updated_at` | 更新时间 | 数据库记录更新时间。 |
+| `customer_id` | 所属客户/公司 ID | 逻辑关联 customers。 |
+| `customer_name` | 所属客户/公司名称 | 冗余展示字段。 |
+| `department_name` | 联系人部门 | API 字段。 |
+| `position_name` | 联系人职位 | API 字段。 |
+| `source_flags` | 来源标记 | `contact`、`company_contact` 或组合。 |
+| `source_updated_at` | 来源更新时间 | API 更新时间。 |
+| `last_sync_at` | 最近同步时间 | 程序写入。 |
+| `created_at` | 入库时间 | MySQL 默认值。 |
+| `updated_at` | 更新时间 | MySQL 自动更新。 |
 
-建议索引：
+### 7.3 索引
 
 ```sql
 PRIMARY KEY (contact_id),
@@ -389,57 +352,34 @@ KEY idx_phone (phone),
 KEY idx_source_flags (source_flags)
 ```
 
-## 表 5：sync_task_log
+## 8. 表 5：sync_task_log
 
-定位：
+### 8.1 用途
 
-- 同步任务日志表。
-- 不是业务数据表。
-- 用于记录每次批量同步或导入任务的执行情况。
+`sync_task_log` 记录每次同步任务执行情况，包括任务类型、目标年月、成功数、失败数、跳过数、耗时和扩展 JSON。
 
-建议字段：
+### 8.2 字段
 
-```text
-id
-task_type
-target_year
-target_month
-target_month_label
-status
-total_count
-success_count
-failed_count
-skipped_count
-started_at
-finished_at
-duration_seconds
-error_message
-extra_json
-created_at
-```
-
-字段中文说明：
-
-| 字段名 | 中文说明 | 备注 |
+| 字段名 | 中文说明 | 来源/用途 |
 |---|---|---|
-| `id` | 日志 ID | 自增主键。 |
-| `task_type` | 任务类型 | 例如 `ticket_detail`、`customer`、`contact`。 |
-| `target_year` | 目标年份 | 例如 `2025`。 |
-| `target_month` | 目标月份 | 例如 `1` 到 `12`。 |
-| `target_month_label` | 目标年月 | 格式 `YYYY-MM`。 |
-| `status` | 任务状态 | 例如 `running`、`success`、`failed`、`partial`。 |
-| `total_count` | 应处理数量 | 本次任务计划处理总量。 |
-| `success_count` | 成功数量 | 成功写入或同步数量。 |
-| `failed_count` | 失败数量 | 同步失败数量。 |
-| `skipped_count` | 跳过数量 | 远端未更新或已存在时跳过数量。 |
-| `started_at` | 开始时间 | 任务开始时间。 |
-| `finished_at` | 结束时间 | 任务结束时间。 |
-| `duration_seconds` | 耗时秒数 | 任务耗时。 |
-| `error_message` | 错误摘要 | 任务失败或部分失败时记录。 |
-| `extra_json` | 扩展信息 JSON | 可记录失败 ID、分页信息等。 |
-| `created_at` | 日志创建时间 | 数据库记录创建时间。 |
+| `id` | 自增主键 | 日志 ID。 |
+| `task_type` | 任务类型 | `ticket_detail`、`customer`、`contact`。 |
+| `target_year` | 目标年份 | 任务参数。 |
+| `target_month` | 目标月份 | 任务参数。 |
+| `target_month_label` | 目标年月 | `YYYY-MM`。 |
+| `status` | 任务状态 | `running`、`success`、`failed`、`partial`。 |
+| `total_count` | 应处理数量 | 任务统计。 |
+| `success_count` | 成功数量 | 任务统计。 |
+| `failed_count` | 失败数量 | 任务统计。 |
+| `skipped_count` | 跳过数量 | `source_updated_at` 未变化时跳过。 |
+| `started_at` | 开始时间 | MySQL 默认值或程序写入。 |
+| `finished_at` | 结束时间 | 程序写入。 |
+| `duration_seconds` | 耗时秒数 | 程序计算。 |
+| `error_message` | 错误摘要 | 失败时写入。 |
+| `extra_json` | 扩展信息 | 失败 ID、checkpoint 等。 |
+| `created_at` | 日志创建时间 | MySQL 默认值。 |
 
-建议索引：
+### 8.3 索引
 
 ```sql
 PRIMARY KEY (id),
@@ -448,62 +388,366 @@ KEY idx_status (status),
 KEY idx_started_at (started_at)
 ```
 
-用途：
+## 9. 入库和更新策略
 
-- 记录某个月是否跑过。
-- 记录成功、失败、跳过数量。
-- 记录任务是否中断。
-- 保存失败 ID 列表或错误摘要。
+### 9.1 单条工单
 
-## 关联关系
+流程：
 
-逻辑关联：
+1. 调用工单详情接口获取 raw detail。
+2. 调用 resolver 解析枚举、人员、客服组、模板、自定义字段。
+3. 构造 `ticket_detail_main` 一行。
+4. 构造 `ticket_detail_custom_fields` 多行。
+5. 在同一个事务中执行主表 upsert 和自定义字段刷新。
 
-```text
-ticket_detail_main.cust_user_id -> contacts.contact_id
-contacts.customer_id -> customers.customer_id
-ticket_detail_custom_fields.ticket_id -> ticket_detail_main.ticket_id
+命令：
+
+```powershell
+uv run work_order_process_v1.1 mysql-import-ticket --ticket-id 22256891
 ```
 
-不建议强制建 MySQL 外键，原因：
+### 9.2 按月导入
 
-- 工单两张表需要分区。
-- MySQL 分区表不适合外键。
-- 历史数据可能存在脏关联。
-- 批量导入时外键会降低吞吐并增加失败概率。
+流程：
 
-## 工单更新策略
+1. 按 `createDT:YYYY-MM` 搜索该月工单。
+2. 分页获取所有工单 ID。
+3. 并发拉取详情。
+4. 按批次写入 MySQL。
+5. 记录 `sync_task_log`。
 
-同步单条工单时：
+命令：
 
-1. 拉取接口详情。
-2. 读取远端 `updateDT`，写入 `source_updated_at`。
-3. 查询本地同一 `ticket_id` 的 `source_updated_at`。
-4. 如果远端没有变化：
-   - 可跳过主数据更新。
-   - 记录 `skipped` 或只更新 `last_sync_at`。
-5. 如果远端有变化：
-   - upsert `ticket_detail_main`。
-   - 删除该 `ticket_id` 的旧 `ticket_detail_custom_fields`。
-   - 插入当前详情中的全部 `custom_fields`。
+```powershell
+uv run work_order_process_v1.1 mysql-import-month --year 2025 --month 1
+```
 
-自定义字段采用整条重刷策略，避免字段新增、删除、顺序变化后留下旧数据。
+低并发试跑：
 
-## 当前代码状态
+```powershell
+uv run work_order_process_v1.1 mysql-import-month --year 2025 --month 1 --max-workers 2 --batch-size 20 --api-rate-limit 3
+```
 
-当前代码已实现：
+### 9.3 按年导入
 
-- `mysql-init`：初始化基础版 `ticket_detail_main` 和 `ticket_detail_custom_fields`。
-- `mysql-import-ticket --ticket-id 22256891`：拉取单条工单详情并入库。
+命令：
 
-已验证：
+```powershell
+uv run work_order_process_v1.1 mysql-import-year --year 2025
+```
 
-- `22256891` 主表写入 1 行。
-- `22256891` 自定义字段写入 189 行。
+也可以只指定其中一个月份：
 
-待升级：
+```powershell
+uv run work_order_process_v1.1 mysql-import-year --year 2025 --month 6
+```
 
-- 将当前基础 DDL 升级为本文档中的 5 表模型。
-- 工单两张表改为分区表。
-- 增加年月、同步、分析维度字段。
-- 增加客户、联系人、同步日志表。
+### 9.4 增量跳过
+
+`_upsert_ticket_detail` 会先查询现有行的 `source_updated_at`：
+
+```sql
+SELECT source_updated_at
+FROM ticket_detail_main
+WHERE ticket_id = ? AND create_dt = ?;
+```
+
+如果远端 `updateDT` 与本地 `source_updated_at` 一致：
+
+- 不重写主表。
+- 不刷新自定义字段。
+- 只更新 `last_sync_at` 和 `sync_status='skipped'`。
+
+如果不存在或更新时间变化：
+
+- 主表执行 `INSERT ... ON DUPLICATE KEY UPDATE`。
+- 自定义字段先删除同一 `ticket_id + create_dt` 的旧行。
+- 再批量插入新的自定义字段行。
+
+## 10. 常用查询
+
+### 10.1 查看月度工单量
+
+```sql
+SELECT
+  create_month_label,
+  COUNT(*) AS ticket_count
+FROM ticket_detail_main
+WHERE create_month_label BETWEEN '2025-01' AND '2025-12'
+GROUP BY create_month_label
+ORDER BY create_month_label;
+```
+
+### 10.2 按 create_dt 范围查询，利用分区裁剪
+
+```sql
+SELECT ticket_id, subject, ticket_status, create_dt
+FROM ticket_detail_main
+WHERE create_dt >= '2025-06-01'
+  AND create_dt < '2025-07-01'
+ORDER BY create_dt;
+```
+
+### 10.3 验证分区裁剪
+
+```sql
+EXPLAIN PARTITIONS
+SELECT ticket_id
+FROM ticket_detail_main
+WHERE create_dt >= '2025-06-01'
+  AND create_dt < '2025-07-01';
+```
+
+预期 `partitions` 只出现 `p202506`。
+
+### 10.4 查询单条工单详情
+
+```sql
+SELECT *
+FROM ticket_detail_main
+WHERE ticket_id = 22256891;
+```
+
+### 10.5 查询单条工单自定义字段
+
+```sql
+SELECT
+  field_order,
+  field_key,
+  field_name,
+  field_value,
+  field_value_type
+FROM ticket_detail_custom_fields
+WHERE ticket_id = 22256891
+ORDER BY create_dt, field_order;
+```
+
+### 10.6 查看某个自定义字段值分布
+
+```sql
+SELECT
+  field_value,
+  COUNT(DISTINCT ticket_id) AS ticket_count
+FROM ticket_detail_custom_fields
+WHERE create_month_label BETWEEN '2025-01' AND '2025-12'
+  AND field_name = '客户性质'
+GROUP BY field_value
+ORDER BY ticket_count DESC;
+```
+
+### 10.7 按模板查看字段清单
+
+```sql
+SELECT
+  ticket_template_id,
+  field_name,
+  COUNT(*) AS row_count,
+  COUNT(DISTINCT ticket_id) AS ticket_count
+FROM ticket_detail_custom_fields
+WHERE create_month_label = '2025-06'
+GROUP BY ticket_template_id, field_name
+ORDER BY ticket_template_id, ticket_count DESC;
+```
+
+### 10.8 按客服统计工单量
+
+```sql
+SELECT
+  servicer_user_id,
+  servicer_user_name,
+  COUNT(*) AS ticket_count
+FROM ticket_detail_main
+WHERE create_month_label BETWEEN '2025-01' AND '2025-12'
+GROUP BY servicer_user_id, servicer_user_name
+ORDER BY ticket_count DESC;
+```
+
+### 10.9 按客服组统计工单量
+
+```sql
+SELECT
+  servicer_group_id,
+  servicer_group_name,
+  COUNT(*) AS ticket_count
+FROM ticket_detail_main
+WHERE create_month_label BETWEEN '2025-01' AND '2025-12'
+GROUP BY servicer_group_id, servicer_group_name
+ORDER BY ticket_count DESC;
+```
+
+### 10.10 按地区统计
+
+```sql
+SELECT
+  province,
+  city,
+  district,
+  COUNT(*) AS ticket_count
+FROM ticket_detail_main
+WHERE create_month_label BETWEEN '2025-01' AND '2025-12'
+GROUP BY province, city, district
+ORDER BY ticket_count DESC;
+```
+
+### 10.11 按问题类型统计
+
+```sql
+SELECT
+  problem_type,
+  COUNT(*) AS ticket_count
+FROM ticket_detail_main
+WHERE create_month_label BETWEEN '2025-01' AND '2025-12'
+GROUP BY problem_type
+ORDER BY ticket_count DESC;
+```
+
+### 10.12 统计解决时长
+
+```sql
+SELECT
+  ticket_id,
+  subject,
+  create_dt,
+  solve_dt,
+  ROUND(TIMESTAMPDIFF(MINUTE, create_dt, solve_dt) / 60, 2) AS solve_hours
+FROM ticket_detail_main
+WHERE create_dt IS NOT NULL
+  AND solve_dt IS NOT NULL
+ORDER BY solve_hours DESC
+LIMIT 100;
+```
+
+### 10.13 月度平均解决时长
+
+```sql
+SELECT
+  create_month_label,
+  COUNT(*) AS solved_count,
+  ROUND(AVG(TIMESTAMPDIFF(MINUTE, create_dt, solve_dt)) / 60, 2) AS avg_solve_hours
+FROM ticket_detail_main
+WHERE create_month_label BETWEEN '2025-01' AND '2025-12'
+  AND solve_dt IS NOT NULL
+GROUP BY create_month_label
+ORDER BY create_month_label;
+```
+
+### 10.14 查询失败或异常同步记录
+
+```sql
+SELECT
+  task_type,
+  target_month_label,
+  status,
+  total_count,
+  success_count,
+  failed_count,
+  skipped_count,
+  error_message,
+  started_at,
+  finished_at,
+  duration_seconds
+FROM sync_task_log
+WHERE status IN ('failed', 'partial')
+ORDER BY started_at DESC
+LIMIT 50;
+```
+
+### 10.15 查看最近同步日志
+
+```sql
+SELECT
+  id,
+  task_type,
+  target_month_label,
+  status,
+  total_count,
+  success_count,
+  failed_count,
+  skipped_count,
+  duration_seconds,
+  started_at,
+  finished_at
+FROM sync_task_log
+ORDER BY id DESC
+LIMIT 20;
+```
+
+命令行等价：
+
+```powershell
+uv run work_order_process_v1.1 mysql-sync-log --log-limit 20
+```
+
+## 11. 运维建议
+
+### 11.1 初始化
+
+```powershell
+uv run work_order_process_v1.1 mysql-init
+```
+
+该命令会：
+
+1. 创建数据库。
+2. 创建 5 张表。
+3. 为两张工单表创建 2025-01 到 2026-12 的月度分区和 `pmax`。
+
+### 11.2 全量导入前试跑
+
+先低并发跑一个月：
+
+```powershell
+uv run work_order_process_v1.1 mysql-import-month --year 2025 --month 1 --max-workers 2 --batch-size 20 --api-rate-limit 3
+```
+
+检查：
+
+- `sync_task_log` 是否记录成功。
+- `ticket_detail_main` 行数是否接近接口返回数量。
+- `ticket_detail_custom_fields` 是否有明细。
+- 常用字段如 `servicer_user_name`、`ticket_template_name` 是否补齐。
+
+### 11.3 正式导入
+
+```powershell
+uv run work_order_process_v1.1 mysql-import-year --year 2025 --max-workers 8 --batch-size 100 --api-rate-limit 10
+```
+
+如果接口限流或失败率较高：
+
+- 降低 `--max-workers`。
+- 降低 `--api-rate-limit`。
+- 降低 `--batch-size`。
+- 按月重跑失败月份。
+
+### 11.4 分区维护
+
+每月或每季度提前创建未来分区：
+
+```powershell
+uv run work_order_process_v1.1 mysql-add-partitions --months-ahead 6
+```
+
+### 11.5 危险操作
+
+```powershell
+uv run work_order_process_v1.1 mysql-drop-tables
+```
+
+该命令会删除全部 5 张表，只能在明确确认 `.env` 指向测试库或目标库后使用。
+
+## 12. 与旧根目录版的差异
+
+旧根目录版文档中有不少“目标版建议”内容；当前组合版已经把其中大部分目标落地：
+
+| 项目 | 旧根目录版 | 当前组合版 |
+|---|---|---|
+| 工单主表 | 基础字段，后续建议补充分区和同步字段 | 已按 `create_dt` 分区，主键 `(ticket_id, create_dt)` |
+| 自定义字段表 | 基础字段，后续建议补充 `create_dt` | 已包含 `create_dt`、年月字段和分区 |
+| 客户表 | 文档建议 | 已落地 `customers` |
+| 联系人表 | 文档建议 | 已落地 `contacts` |
+| 同步日志 | 文档建议 | 已落地 `sync_task_log` |
+| 原始 ID 与名称 | 建议同时保留 | 已保留 ID，并新增 `*_name` 字段 |
+| 分区维护 | 建议方案 | 已提供 `mysql-add-partitions` |
+
+因此当前文档不再使用“基础版/目标版”的旧描述，而是直接描述当前实现。

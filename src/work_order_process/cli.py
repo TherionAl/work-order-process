@@ -1,8 +1,19 @@
 """命令行入口。
 
-当前项目只保留一个主要输出流程：
-按 2025 年 1-12 月分别导出工单合集，并从每个月抽 3 条工单详情，
-生成 raw、value_resolved、chinese 三份对照 JSON。
+支持的命令：
+- run: 按年份导出月度工单合集和每月样本详情（三段式 JSON）
+- template-samples: 按工单模板分别抽样
+- mysql-init: 初始化 MySQL 5 表结构（含分区）
+- mysql-drop-tables: 删除全部 5 张表（危险）
+- mysql-import-ticket: 单条工单详情入库
+- mysql-import-month: 某个月全部工单详情入库
+- mysql-import-year: 某年全部工单详情入库（支持断点续跑）
+- mysql-import-customers: 导入客户/公司到 customers 表
+- mysql-import-contacts: 导入联系人到 contacts 表
+- mysql-add-partitions: 提前创建未来的月分区
+- mysql-sync-log: 查看同步任务日志
+- probe: 探测接口可用性
+- dictionary: 导出数据字典 JSON
 """
 
 from __future__ import annotations
@@ -14,34 +25,107 @@ from rich.console import Console
 from rich.table import Table
 
 from .api import ApiError, WorkOrderClient
-from .config import load_settings
+from .config import ConfigError, load_settings
 from .dictionary import DataDictionary
-from .mysql_storage import ensure_mysql_schema, import_ticket_detail_to_mysql
-from .monthly_export import export_month_template_samples, export_year_monthly_tickets_and_samples
+from .mysql_storage import (
+    add_future_partitions,
+    drop_mysql_tables,
+    ensure_mysql_schema,
+    generate_months_ahead,
+    get_existing_partitions,
+    import_contacts_to_mysql,
+    import_customers_to_mysql,
+    import_ticket_detail_to_mysql,
+    import_month_tickets_serial,
+    import_month_tickets_to_mysql,
+    import_year_tickets_to_mysql,
+)
+from .monthly_export import (
+    export_month_template_samples,
+    export_year_monthly_tickets,
+    export_year_monthly_tickets_and_samples,
+)
 
 
 console = Console()
 
 
 def main() -> None:
-    """解析命令行参数并执行当前保留的工单月度导出流程。"""
+    """解析命令行参数并执行对应的工单处理流程。"""
 
-    parser = argparse.ArgumentParser(description="Export 2025 monthly work-order data.")
+    parser = argparse.ArgumentParser(description="工单数据获取、解析和入库工具。")
     parser.add_argument(
         "command",
-        choices=["run", "template-samples", "mysql-init", "mysql-import-ticket", "probe", "dictionary"],
+        choices=[
+            "run", "monthly-tickets", "template-samples",
+            "mysql-init", "mysql-drop-tables",
+            "mysql-import-ticket", "mysql-import-month", "mysql-import-month-v1", "mysql-import-year",
+            "mysql-import-customers", "mysql-import-contacts",
+            "mysql-add-partitions", "mysql-sync-log",
+            "probe", "dictionary",
+        ],
         nargs="?",
         default="run",
-        help="run: 导出月度工单合集和每月 3 条详情；template-samples: 按模板分别抽样；mysql-init/mysql-import-ticket: MySQL 操作。",
+        help=(
+            "run: 导出月度工单合集和样本详情；monthly-tickets: 只导出月度工单合集；template-samples: 按模板抽样；"
+            "mysql-init: 初始化 5 表结构；mysql-drop-tables: 删除全部表；"
+            "mysql-import-ticket: 单条入库；mysql-import-month: 单月入库；"
+            "mysql-import-year: 全年入库；mysql-import-customers: 导入客户；"
+            "mysql-import-contacts: 导入联系人；mysql-add-partitions: 增加分区；"
+            "mysql-sync-log: 查看同步日志；probe: 探测接口；dictionary: 导出数据字典。"
+        ),
     )
     parser.add_argument("--ticket-id", default=None, help="MySQL 入库时指定单条工单 ID。")
-    parser.add_argument("--year", type=int, default=2025, help="需要导出的年份，默认 2025。")
-    parser.add_argument("--month", type=int, default=None, help="只导出指定月份，取值 1-12；默认导出全年。")
+    parser.add_argument("--year", type=int, default=2025, help="需要处理的年份，默认 2025。")
+    parser.add_argument("--month", type=int, default=None, help="只处理指定月份，取值 1-12；默认处理全年。")
     parser.add_argument("--sample-size", type=int, default=3, help="每个月抽取的工单详情数量，默认 3。")
     parser.add_argument("--seed", type=int, default=2025, help="月度抽样随机种子，默认 2025，保证可复现。")
     parser.add_argument("--per-page", type=int, default=5000, help="搜索接口分页大小，默认 5000。")
+    parser.add_argument("--detail-workers", type=int, default=4, help="样本详情并发获取线程数，默认 4。")
     parser.add_argument("--limit-per-month", type=int, default=None, help="调试用：限制每个月最多获取多少条列表记录。")
     parser.add_argument("--overwrite", action="store_true", help="覆盖已有月度输出文件。")
+    parser.add_argument(
+        "--customers-source",
+        choices=["companies", "customers", "both"],
+        default="both",
+        help="客户导入的数据源，默认 both。",
+    )
+    parser.add_argument(
+        "--contacts-source",
+        choices=["contacts", "company_contacts", "both"],
+        default="both",
+        help="联系人导入的数据源，默认 both。",
+    )
+    parser.add_argument(
+        "--months-ahead",
+        type=int,
+        default=6,
+        help="mysql-add-partitions: 提前创建多少个月的分区，默认 6。",
+    )
+    parser.add_argument(
+        "--log-limit",
+        type=int,
+        default=20,
+        help="mysql-sync-log: 显示最近多少条日志，默认 20。",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=8,
+        help="并发导入时的 API 拉取线程数，默认 8。",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=100,
+        help="并发导入时每批提交的事务大小，默认 100。",
+    )
+    parser.add_argument(
+        "--api-rate-limit",
+        type=int,
+        default=10,
+        help="并发导入时 API QPS 上限，默认 10。",
+    )
     args = parser.parse_args()
 
     settings = load_settings()
@@ -50,27 +134,104 @@ def main() -> None:
     if args.command == "dictionary":
         output = settings.output_dir / "dictionary.json"
         dictionary.save_json(output)
-        console.print(f"Saved dictionary to {output}")
+        console.print(f"数据字典已保存到 {output}")
         _print_dictionary_summary(dictionary)
         return
 
     if args.command == "mysql-init":
         ensure_mysql_schema(settings.mysql)
-        console.print(f"MySQL schema is ready: {settings.mysql.host}:{settings.mysql.port}/{settings.mysql.database}")
+        partitions = get_existing_partitions(settings.mysql)
+        month_count = len(partitions) - (1 if "pmax" in partitions else 0)
+        console.print(
+            f"[green]MySQL 数据库初始化完成[/green]\n"
+            f"地址: {settings.mysql.host}:{settings.mysql.port}/{settings.mysql.database}\n"
+            f"已创建 5 张表，{month_count} 个月分区 + pmax"
+        )
+        return
+
+    if args.command == "mysql-drop-tables":
+        drop_mysql_tables(settings.mysql)
+        console.print("[yellow]全部 5 张表已删除。[/yellow]")
+        return
+
+    if args.command == "mysql-add-partitions":
+        months_list = generate_months_ahead(args.months_ahead)
+        created = add_future_partitions(settings.mysql, months_list)
+        if created:
+            console.print(f"[green]新建分区: {', '.join(created)}[/green]")
+        else:
+            console.print("[dim]所有月份分区均已存在，无需新建。[/dim]")
         return
 
     try:
         with WorkOrderClient(settings) as client:
             client.authenticate()
+
             if args.command == "mysql-import-ticket":
                 if not args.ticket_id:
                     raise ApiError("Please pass --ticket-id for mysql-import-ticket.")
                 report = import_ticket_detail_to_mysql(settings.mysql, dictionary, client, args.ticket_id)
                 _print_mysql_import_report(report)
                 return
+
+            if args.command == "mysql-import-month":
+                if args.month is None:
+                    raise ApiError("mysql-import-month 需要传入 --month。")
+                report = import_month_tickets_to_mysql(
+                    settings.mysql, dictionary, client,
+                    year=args.year, month=args.month, per_page=args.per_page,
+                    max_workers=args.max_workers, batch_size=args.batch_size,
+                    api_rate_limit=args.api_rate_limit,
+                    output_dir=settings.output_dir,
+                )
+                _print_mysql_month_report(report)
+                return
+
+            if args.command == "mysql-import-month-v1":
+                # 保留旧的串行导入方式，用于调试对比
+                if args.month is None:
+                    raise ApiError("mysql-import-month-v1 需要传入 --month。")
+                report = import_month_tickets_serial(
+                    settings.mysql, dictionary, client,
+                    year=args.year, month=args.month, per_page=args.per_page,
+                    output_dir=settings.output_dir,
+                )
+                _print_mysql_month_report(report)
+                return
+
+            if args.command == "mysql-import-year":
+                report = import_year_tickets_to_mysql(
+                    settings.mysql, dictionary, client,
+                    year=args.year,
+                    months=[args.month] if args.month is not None else None,
+                    per_page=args.per_page,
+                    max_workers=args.max_workers, batch_size=args.batch_size,
+                    api_rate_limit=args.api_rate_limit,
+                    output_dir=settings.output_dir,
+                )
+                _print_mysql_year_report(report)
+                return
+
+            if args.command == "mysql-import-customers":
+                sources = _resolve_sources(args.customers_source, ["companies", "customers"])
+                report = import_customers_to_mysql(settings.mysql, client, sources=sources)
+                _print_customer_contact_report("customers", report)
+                return
+
+            if args.command == "mysql-import-contacts":
+                sources = _resolve_sources(args.contacts_source, ["contacts", "company_contacts"])
+                report = import_contacts_to_mysql(settings.mysql, client, sources=sources)
+                _print_customer_contact_report("contacts", report)
+                return
+
+            if args.command == "mysql-sync-log":
+                _print_sync_log(settings)
+                return
+
             if args.command == "probe":
                 _probe(client)
                 return
+
             if args.command == "template-samples":
                 if args.month is None:
                     raise ApiError("Please pass --month for template-samples.")
@@ -83,9 +244,24 @@ def main() -> None:
                     sample_size=args.sample_size,
                     seed=args.seed,
                     overwrite=args.overwrite,
+                    detail_workers=args.detail_workers,
                 )
                 _print_template_sample_report(report)
                 return
+
+            if args.command == "monthly-tickets":
+                report = export_year_monthly_tickets(
+                    settings.output_dir,
+                    client,
+                    year=args.year,
+                    months=[args.month] if args.month is not None else None,
+                    per_page=args.per_page,
+                    limit_per_month=args.limit_per_month,
+                    overwrite=args.overwrite,
+                )
+                _print_monthly_ticket_report(report)
+                return
+
             report = export_year_monthly_tickets_and_samples(
                 settings.output_dir,
                 dictionary,
@@ -97,11 +273,72 @@ def main() -> None:
                 per_page=args.per_page,
                 limit_per_month=args.limit_per_month,
                 overwrite=args.overwrite,
+                detail_workers=args.detail_workers,
             )
             _print_year_report(report)
     except ApiError as exc:
-        console.print(f"[red]API error:[/red] {exc}")
+        console.print(f"[red]接口错误：[/red] {exc}")
         raise SystemExit(2) from exc
+    except ConfigError as exc:
+        console.print(f"[red]配置错误:[/red] {exc}")
+        raise SystemExit(3) from exc
+
+
+def _resolve_sources(source_arg: str, both: list[str]) -> tuple[str, ...]:
+    """把 CLI 的 xxx-source 选项转换为来源元组。"""
+
+    if source_arg == "both":
+        return tuple(both)
+    return (source_arg,)
+
+
+def _print_sync_log(settings: Any) -> None:
+    """读取 sync_task_log 并打印最近 N 条。"""
+
+    import pymysql
+
+    limit = _get_log_limit()
+
+    with pymysql.connect(
+        host=settings.mysql.host,
+        port=settings.mysql.port,
+        user=settings.mysql.user,
+        password=settings.mysql.password,
+        database=settings.mysql.database,
+        charset="utf8mb4",
+        autocommit=True,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, task_type, target_month_label, status, "
+                "total_count, success_count, failed_count, skipped_count, "
+                "duration_seconds, started_at, finished_at "
+                "FROM sync_task_log ORDER BY id DESC LIMIT %s",
+                (limit,),
+            )
+            rows = cursor.fetchall()
+
+    if not rows:
+        console.print("[dim]sync_task_log 表为空。[/dim]")
+        return
+
+    table = Table("ID", "Type", "Month", "Status", "Total", "OK", "Fail", "Skip", "Secs")
+    for row in rows:
+        table.add_row(
+            str(row[0]), row[1], row[2] or "-", row[3],
+            str(row[4]), str(row[5]), str(row[6]), str(row[7]), str(row[8] or ""),
+        )
+    console.print(table)
+
+
+def _get_log_limit() -> int:
+    """返回 --log-limit 的值（延迟读取，避免全局 argparse 依赖）。"""
+
+    import sys
+    for idx, arg in enumerate(sys.argv):
+        if arg == "--log-limit" and idx + 1 < len(sys.argv):
+            return int(sys.argv[idx + 1])
+    return 20
 
 
 def _probe(client: WorkOrderClient) -> None:
@@ -128,8 +365,19 @@ def _print_year_report(report: dict[str, Any]) -> None:
         )
     table.add_row("total", str(report["ticket_total"]), str(report["detail_total"]), str(report["failed_total"]))
     console.print(table)
-    console.print(f"Monthly tickets: {report['monthly_ticket_dir']}")
-    console.print(f"Monthly sample details: {report['monthly_sample_detail_dir']}")
+    console.print(f"月度工单合集: {report['monthly_ticket_dir']}")
+    console.print(f"月度样本详情: {report['monthly_sample_detail_dir']}")
+
+
+def _print_monthly_ticket_report(report: dict[str, Any]) -> None:
+    """输出只导出月度工单合集时的摘要。"""
+
+    table = Table("Month", "Tickets", "Declared")
+    for item in report["months"]:
+        table.add_row(str(item["month"]), str(item["fetched_count"]), str(item["declared_count"]))
+    table.add_row("total", str(report["ticket_total"]), "")
+    console.print(table)
+    console.print(f"月度工单合集: {report['monthly_ticket_dir']}")
 
 
 def _print_template_sample_report(report: dict[str, Any]) -> None:
@@ -145,7 +393,7 @@ def _print_template_sample_report(report: dict[str, Any]) -> None:
         )
     table.add_row("total", str(report["template_count"]), "", str(report["detail_count"]))
     console.print(table)
-    console.print(f"Template sample details: {report['output_dir']}")
+    console.print(f"模板样本详情: {report['output_dir']}")
 
 
 def _print_mysql_import_report(report: dict[str, Any]) -> None:
@@ -154,6 +402,54 @@ def _print_mysql_import_report(report: dict[str, Any]) -> None:
     table = Table("Metric", "Value")
     for key, value in report.items():
         table.add_row(str(key), str(value))
+    console.print(table)
+
+
+def _print_mysql_month_report(report: dict[str, Any]) -> None:
+    """输出月度 MySQL 入库摘要。"""
+
+    table = Table("Metric", "Value")
+    table.add_row("Month", report["month"])
+    table.add_row("Total in month", str(report["total_in_month"]))
+    table.add_row("Imported", str(report["imported"]))
+    table.add_row("Updated", str(report.get("updated", 0)))
+    table.add_row("Skipped", str(report.get("skipped", 0)))
+    table.add_row("Failed", str(report["failed"]))
+    table.add_row("Custom field rows", str(report["custom_field_rows"]))
+    table.add_row("Duration (s)", str(report.get("duration_seconds", "")))
+    if report.get("failed_ids"):
+        table.add_row("Failed IDs", ", ".join(str(x) for x in report["failed_ids"][:20]))
+    console.print(table)
+
+
+def _print_mysql_year_report(report: dict[str, Any]) -> None:
+    """输出年度 MySQL 入库摘要。"""
+
+    table = Table("Month", "Total", "Imported", "Updated", "Skipped", "Failed")
+    for item in report["months"]:
+        table.add_row(
+            item["month"],
+            str(item["total_in_month"]),
+            str(item["imported"]),
+            str(item.get("updated", 0)),
+            str(item.get("skipped", 0)),
+            str(item["failed"]),
+        )
+    table.add_row(
+        "total", "",
+        str(report["total_imported"]),
+        str(report.get("total_updated", 0)),
+        str(report.get("total_skipped", 0)),
+        str(report["total_failed"]),
+    )
+    console.print(table)
+
+
+def _print_customer_contact_report(table_name: str, report: dict[str, Any]) -> None:
+    """输出客户/联系人导入摘要。"""
+
+    table = Table("Table", "Total", "Succeeded", "Failed", "Duration (s)")
+    table.add_row(table_name, str(report["total"]), str(report["succeeded"]), str(report["failed"]), str(report.get("duration_seconds", "")))
     console.print(table)
 
 

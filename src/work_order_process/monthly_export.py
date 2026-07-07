@@ -8,10 +8,14 @@
 
 from __future__ import annotations
 
-import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 import json
 from pathlib import Path
+import random
 from typing import Any, Iterable
+
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from .api import ApiError, WorkOrderClient
 from .dictionary import DataDictionary
@@ -22,6 +26,7 @@ from .resolver import TicketFieldResolver, resolve_ticket_detail_values
 MONTHLY_TICKET_DIR_TEMPLATE = "{year}_monthly_tickets"
 MONTHLY_SAMPLE_DETAIL_DIR_TEMPLATE = "{year}_monthly_sample_details"
 TEMPLATE_SAMPLE_DETAIL_DIR_TEMPLATE = "{year}_{month:02d}_template_sample_details"
+DEFAULT_DETAIL_WORKERS = 4
 
 
 def export_year_monthly_tickets_and_samples(
@@ -35,6 +40,8 @@ def export_year_monthly_tickets_and_samples(
     per_page: int = 5000,
     limit_per_month: int | None = None,
     overwrite: bool = False,
+    detail_workers: int = DEFAULT_DETAIL_WORKERS,
+    show_progress: bool = True,
 ) -> dict[str, Any]:
     """导出某一年 12 个月的工单合集，并为每个月抽样生成详情三件套。
 
@@ -51,36 +58,43 @@ def export_year_monthly_tickets_and_samples(
 
     month_numbers = list(months) if months is not None else list(range(1, 13))
     month_reports: list[dict[str, Any]] = []
-    for month in month_numbers:
-        month_label = build_month_label(year, month)
-        ticket_report = _load_or_fetch_month_tickets(
-            output_dir,
-            client,
-            year,
-            month,
-            per_page=per_page,
-            limit_per_month=limit_per_month,
-            overwrite=overwrite,
-        )
-        sample_rows = _sample_ticket_rows(ticket_report["tickets"], sample_size, seed, month_label)
-        detail_report = _export_month_sample_details(
-            monthly_sample_detail_dir,
-            month_label,
-            sample_rows,
-            dictionary,
-            client,
-            field_resolver,
-            overwrite=overwrite or bool(ticket_report.get("_regenerated")),
-        )
-        month_reports.append(
-            {
-                "month": month_label,
-                "declared_count": ticket_report["declared_count"],
-                "fetched_count": ticket_report["fetched_count"],
-                "ticket_output": str(monthly_ticket_dir / f"{month_label}_tickets.json"),
-                **detail_report,
-            }
-        )
+    with _progress_context(show_progress) as progress:
+        task_id = progress.add_task("导出月份和样本详情", total=len(month_numbers)) if progress else None
+        for month in month_numbers:
+            month_label = build_month_label(year, month)
+            if progress and task_id is not None:
+                progress.update(task_id, description=f"导出 {month_label}")
+            ticket_report = _load_or_fetch_month_tickets(
+                output_dir,
+                client,
+                year,
+                month,
+                per_page=per_page,
+                limit_per_month=limit_per_month,
+                overwrite=overwrite,
+            )
+            sample_rows = _sample_ticket_rows(ticket_report["tickets"], sample_size, seed, month_label)
+            detail_report = _export_month_sample_details(
+                monthly_sample_detail_dir,
+                month_label,
+                sample_rows,
+                dictionary,
+                client,
+                field_resolver,
+                overwrite=overwrite or bool(ticket_report.get("_regenerated")),
+                detail_workers=detail_workers,
+            )
+            month_reports.append(
+                {
+                    "month": month_label,
+                    "declared_count": ticket_report["declared_count"],
+                    "fetched_count": ticket_report["fetched_count"],
+                    "ticket_output": str(monthly_ticket_dir / f"{month_label}_tickets.json"),
+                    **detail_report,
+                }
+            )
+            if progress and task_id is not None:
+                progress.update(task_id, advance=1)
 
     return {
         "year": year,
@@ -89,6 +103,59 @@ def export_year_monthly_tickets_and_samples(
         "failed_total": sum(item["failed_count"] for item in month_reports),
         "monthly_ticket_dir": str(monthly_ticket_dir),
         "monthly_sample_detail_dir": str(monthly_sample_detail_dir),
+        "months": month_reports,
+    }
+
+
+def export_year_monthly_tickets(
+    output_dir: Path,
+    client: WorkOrderClient,
+    year: int = 2025,
+    months: Iterable[int] | None = None,
+    per_page: int = 5000,
+    limit_per_month: int | None = None,
+    overwrite: bool = False,
+    show_progress: bool = True,
+) -> dict[str, Any]:
+    """只按创建月份导出工单列表合集，不额外拉取详情样本。
+
+    这个函数用于后续 2026 年全量月度列表备份：先把每个月的工单 ID 和搜索接口
+    返回字段稳定保存下来，后续再按这些 ID 分批获取详情或入库。
+    """
+
+    monthly_ticket_dir = output_dir / MONTHLY_TICKET_DIR_TEMPLATE.format(year=year)
+    month_numbers = list(months) if months is not None else list(range(1, 13))
+    month_reports: list[dict[str, Any]] = []
+    with _progress_context(show_progress) as progress:
+        task_id = progress.add_task("导出月度工单合集", total=len(month_numbers)) if progress else None
+        for month in month_numbers:
+            month_label = build_month_label(year, month)
+            if progress and task_id is not None:
+                progress.update(task_id, description=f"导出 {month_label}")
+            ticket_report = _load_or_fetch_month_tickets(
+                output_dir,
+                client,
+                year,
+                month,
+                per_page=per_page,
+                limit_per_month=limit_per_month,
+                overwrite=overwrite,
+            )
+            month_reports.append(
+                {
+                    "month": month_label,
+                    "declared_count": ticket_report["declared_count"],
+                    "fetched_count": ticket_report["fetched_count"],
+                    "ticket_output": str(monthly_ticket_dir / f"{month_label}_tickets.json"),
+                }
+            )
+            if progress and task_id is not None:
+                progress.update(task_id, advance=1)
+
+    return {
+        "year": year,
+        "ticket_total": sum(item["fetched_count"] for item in month_reports),
+        "monthly_ticket_dir": str(monthly_ticket_dir),
         "months": month_reports,
     }
 
@@ -102,6 +169,8 @@ def export_month_template_samples(
     sample_size: int = 3,
     seed: int = 202606,
     overwrite: bool = False,
+    detail_workers: int = DEFAULT_DETAIL_WORKERS,
+    show_progress: bool = True,
 ) -> dict[str, Any]:
     """按工单模板分别从指定月份随机抽样，并输出三份详情 JSON。
 
@@ -160,18 +229,22 @@ def export_month_template_samples(
     chinese_details: list[dict[str, Any]] = []
     failed_ids: list[str] = []
 
-    for row in sampled_rows:
-        ticket_id = str(row.get("ticketId") or "").strip()
-        if not ticket_id:
-            continue
-        raw_detail = client.fetch_ticket_detail(ticket_id)
-        if not raw_detail:
-            failed_ids.append(ticket_id)
-            continue
-        value_resolved = resolve_ticket_detail_values(raw_detail, client, field_resolver)
-        raw_details.append(raw_detail)
-        value_details.append(value_resolved)
-        chinese_details.append(dictionary.translate_record("tickets", value_resolved))
+    with _progress_context(show_progress) as progress:
+        task_id = progress.add_task(f"获取 {month_label} 模板样本详情", total=len(sampled_rows)) if progress else None
+        for ticket_id, raw_detail in _fetch_sample_raw_details(
+            sampled_rows,
+            client,
+            detail_workers=detail_workers,
+            progress=progress,
+            task_id=task_id,
+        ):
+            if not raw_detail:
+                failed_ids.append(ticket_id)
+                continue
+            value_resolved = resolve_ticket_detail_values(raw_detail, client, field_resolver)
+            raw_details.append(raw_detail)
+            value_details.append(value_resolved)
+            chinese_details.append(dictionary.translate_record("tickets", value_resolved))
 
     write_json(raw_path, raw_details)
     write_json(value_path, value_details)
@@ -313,6 +386,7 @@ def _export_month_sample_details(
     client: WorkOrderClient,
     field_resolver: TicketFieldResolver,
     overwrite: bool,
+    detail_workers: int,
 ) -> dict[str, Any]:
     """把某个月抽到的工单详情输出成三份 JSON。"""
 
@@ -338,11 +412,7 @@ def _export_month_sample_details(
     chinese_details: list[dict[str, Any]] = []
     failed_ids: list[str] = []
 
-    for row in sample_rows:
-        ticket_id = str(row.get("ticketId") or "").strip()
-        if not ticket_id:
-            continue
-        raw_detail = client.fetch_ticket_detail(ticket_id)
+    for ticket_id, raw_detail in _fetch_sample_raw_details(sample_rows, client, detail_workers=detail_workers):
         if not raw_detail:
             failed_ids.append(ticket_id)
             continue
@@ -363,6 +433,57 @@ def _export_month_sample_details(
         "value_resolved_output": str(value_path),
         "chinese_output": str(chinese_path),
     }
+
+
+def _fetch_sample_raw_details(
+    sample_rows: list[dict[str, Any]],
+    client: WorkOrderClient,
+    detail_workers: int,
+    progress: Progress | None = None,
+    task_id: Any = None,
+) -> list[tuple[str, dict[str, Any] | None]]:
+    """并发读取样本工单原始详情，并保持原抽样顺序返回。"""
+
+    ticket_ids = [str(row.get("ticketId") or "").strip() for row in sample_rows if row.get("ticketId")]
+    if not ticket_ids:
+        return []
+
+    max_workers = max(1, min(detail_workers, len(ticket_ids)))
+    if max_workers == 1:
+        results = []
+        for ticket_id in ticket_ids:
+            results.append((ticket_id, client.fetch_ticket_detail(ticket_id)))
+            if progress and task_id is not None:
+                progress.update(task_id, advance=1)
+        return results
+
+    indexed_results: list[tuple[int, str, dict[str, Any] | None]] = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(client.fetch_ticket_detail, ticket_id): (index, ticket_id)
+            for index, ticket_id in enumerate(ticket_ids)
+        }
+        for future in as_completed(futures):
+            index, ticket_id = futures[future]
+            indexed_results.append((index, ticket_id, future.result()))
+            if progress and task_id is not None:
+                progress.update(task_id, advance=1)
+    indexed_results.sort(key=lambda item: item[0])
+    return [(ticket_id, raw_detail) for _, ticket_id, raw_detail in indexed_results]
+
+
+def _progress_context(show_progress: bool):
+    """按需创建 rich 进度条；测试或复用时可关闭输出。"""
+
+    if not show_progress:
+        return nullcontext(None)
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+    )
 
 
 def _sample_ticket_rows(rows: list[dict[str, Any]], sample_size: int, seed: int, month_label: str) -> list[dict[str, Any]]:

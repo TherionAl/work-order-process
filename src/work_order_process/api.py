@@ -3,16 +3,22 @@
 本文件只负责和线上接口通信：统一处理 Basic Auth、请求重试、分页读取、
 详情接口读取，以及从接口返回体中提取列表数据。业务上的字段中文化、
 外键替换等逻辑放在 resolver/transform 中，避免网络请求层和数据处理层混在一起。
+
+实体详情接口（客服、联系人、客服组、模板）使用内部 LRU 缓存，
+避免批量处理多条工单时对同一实体重复请求。
 """
 
 from __future__ import annotations
 
+import os
+import copy
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 import math
 import random
 import time
-from typing import Any
+from typing import Any, TypedDict
 
 import httpx
 
@@ -23,6 +29,50 @@ class ApiError(RuntimeError):
     """接口请求、配置或返回格式不符合预期时抛出的项目级异常。"""
 
     pass
+
+
+# 工单搜索接口返回结构
+class TicketSearchResponse(TypedDict, total=False):
+    count: int
+    results: list[dict[str, Any]]
+
+
+class TicketDetail(TypedDict, total=False):
+    ticketId: str
+    subject: str
+    descript: str
+    custUserId: str
+    servicerUserId: str
+    ccUserIdList: str
+    ticketType: str
+    priorityLevel: str
+    tagList: str
+    ticketStatus: str
+    createDT: str
+    updateDT: str
+    solveDT: str
+    waitDT: str
+    openDT: str
+    closeDT: str
+    servicerGroupId: str
+    createrId: str
+    agentId: str
+    ticketSource: str
+    ticketTemplateId: str
+    ccGroupIdList: str
+    customTemplateId: str
+    createrType: str
+    currentNodeField: str
+    currentNodeFieldValue: str
+    nodeFieldIntoTime: str
+    queryIDs: str
+    workflow_node_id: str
+    workflow_id: str
+    isDeleted: str
+    deleterId: str
+    deleteDT: str
+    descriptattachments: Any
+    custom_fields: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -51,16 +101,24 @@ class WorkOrderClient:
             auth = httpx.BasicAuth(settings.username, settings.password)
         self.client = httpx.Client(
             base_url=settings.base_url,
-            timeout=httpx.Timeout(60.0),
+            timeout=httpx.Timeout(float(os.getenv("WORKORDER_API_TIMEOUT", "300"))),
             follow_redirects=True,
             headers={"Accept": "application/json"},
             auth=auth,
         )
+        # 实体详情缓存：避免批量处理时对同一实体重复请求
+        self._cache: dict[str, dict[str, Any] | None] = {}
 
     def close(self) -> None:
-        """关闭底层 httpx 连接池。"""
+        """关闭底层 httpx 连接池并清空实体缓存。"""
 
+        self._cache.clear()
         self.client.close()
+
+    def clear_cache(self) -> None:
+        """手动清空实体详情缓存。"""
+
+        self._cache.clear()
 
     def __enter__(self) -> "WorkOrderClient":
         """支持 with WorkOrderClient(...) as client 的用法。"""
@@ -68,7 +126,7 @@ class WorkOrderClient:
         return self
 
     def __exit__(self, *_args: object) -> None:
-        """退出上下文时释放网络连接。"""
+        """退出上下文时释放网络连接并清空缓存。"""
 
         self.close()
 
@@ -140,20 +198,32 @@ class WorkOrderClient:
     def fetch_contact_detail(self, contact_id: str) -> dict | None:
         """按联系人主键读取联系人详情，用于把 custUserId 替换为联系人姓名。"""
 
+        cache_key = f"contact:{contact_id}"
+        if cache_key in self._cache:
+            return _copy_detail(self._cache[cache_key])
         body = self._json_get(f"/users/{contact_id}")
         user = body.get("user") if isinstance(body, dict) else None
         if isinstance(user, list):
-            return user[0] if user else None
-        return user if isinstance(user, dict) else None
+            result = user[0] if user else None
+        else:
+            result = user if isinstance(user, dict) else None
+        self._cache[cache_key] = _copy_detail(result)
+        return _copy_detail(result)
 
     def fetch_company_detail(self, company_id: str) -> dict | None:
         """按公司主键读取公司详情，供后续需要补全公司名称时复用。"""
 
+        cache_key = f"company:{company_id}"
+        if cache_key in self._cache:
+            return _copy_detail(self._cache[cache_key])
         body = self._json_get(f"/companies/{company_id}")
         company = body.get("company") if isinstance(body, dict) else None
         if isinstance(company, list):
-            return company[0] if company else None
-        return company if isinstance(company, dict) else None
+            result = company[0] if company else None
+        else:
+            result = company if isinstance(company, dict) else None
+        self._cache[cache_key] = _copy_detail(result)
+        return _copy_detail(result)
 
     def fetch_ticket_detail(self, ticket_id: str) -> dict | None:
         """按工单号读取工单详情，是三段式工单导出的原始数据来源。"""
@@ -217,29 +287,47 @@ class WorkOrderClient:
     def fetch_support_detail(self, support_id: str) -> dict | None:
         """按客服 ID 读取客服详情，用于替换 servicerUserId/createrId 等字段。"""
 
+        cache_key = f"support:{support_id}"
+        if cache_key in self._cache:
+            return _copy_detail(self._cache[cache_key])
         body = self._json_get(f"/supports/{support_id}")
         support = body.get("support") if isinstance(body, dict) else None
         if isinstance(support, list):
-            return support[0] if support else None
-        return support if isinstance(support, dict) else None
+            result = support[0] if support else None
+        else:
+            result = support if isinstance(support, dict) else None
+        self._cache[cache_key] = _copy_detail(result)
+        return _copy_detail(result)
 
     def fetch_support_group_detail(self, group_id: str) -> dict | None:
         """按客服组 ID 读取客服组详情，用 sgName 替换客服组相关字段。"""
 
+        cache_key = f"supportgroup:{group_id}"
+        if cache_key in self._cache:
+            return _copy_detail(self._cache[cache_key])
         body = self._json_get(f"/supportgroups/{group_id}")
         support_group = body.get("supportgroup") if isinstance(body, dict) else None
         if isinstance(support_group, list):
-            return support_group[0] if support_group else None
-        return support_group if isinstance(support_group, dict) else None
+            result = support_group[0] if support_group else None
+        else:
+            result = support_group if isinstance(support_group, dict) else None
+        self._cache[cache_key] = _copy_detail(result)
+        return _copy_detail(result)
 
     def fetch_ticket_template_detail(self, template_id: str) -> dict | None:
         """按工单模板 ID 读取模板详情，用 ticketTemplateName 替换 ticketTemplateId。"""
 
+        cache_key = f"template:{template_id}"
+        if cache_key in self._cache:
+            return _copy_detail(self._cache[cache_key])
         body = self._json_get(f"/tickettemplates/{template_id}")
         template = body.get("tickettemplate") if isinstance(body, dict) else None
         if isinstance(template, list):
-            return template[0] if template else None
-        return template if isinstance(template, dict) else None
+            result = template[0] if template else None
+        else:
+            result = template if isinstance(template, dict) else None
+        self._cache[cache_key] = _copy_detail(result)
+        return _copy_detail(result)
 
     def fetch_ticket_templates(self) -> list[dict[str, Any]]:
         """读取全部工单模板列表，用于按模板分别抽样。"""
@@ -311,6 +399,8 @@ class WorkOrderClient:
 
         工单列表数量较大时不直接全量拉取，而是先估算 2025 年之后大致从哪一页开始，
         再随机抽页取样，最后用顺序扫描兜底补满样本数量。
+
+        如果 since 之后的工单总数不足 sample_size，则直接全量返回，避免无效循环。
         """
 
         path = self.settings.endpoint.ticket_paths[0]
@@ -323,6 +413,11 @@ class WorkOrderClient:
         total = int(first_body.get("count") or per_page)
         total_pages = max(1, math.ceil(total / per_page))
         first_page = self._estimate_first_ticket_page_since(path, since, total_pages)
+
+        # 先扫描前几页估算 since 之后的实际数量，如果不足 sample_size 直接全取
+        since_count = self._count_tickets_since(path, since, first_page, total_pages)
+        if since_count <= sample_size:
+            return self._fetch_all_tickets_since(path, since, first_page, total_pages)
 
         rng = random.Random(seed)
         sampled: list[dict] = []
@@ -360,6 +455,49 @@ class WorkOrderClient:
                 if len(sampled) >= sample_size:
                     return sampled
         return sampled
+
+    def _count_tickets_since(self, path: str, since: str, first_page: int, total_pages: int) -> int:
+        """快速估算 since 之后的工单数量：扫描前 3 页 + 末页做比例估算。"""
+
+        if total_pages <= 5:
+            # 页数很少，直接精确计数
+            count = 0
+            for page in range(first_page, total_pages + 1):
+                count += sum(1 for item in _extract_items(self._ticket_page(path, page)) if _record_is_since(item, since))
+            return count
+
+        # 采样前 3 页和末页，按比例估算
+        sample_pages = list(range(first_page, min(first_page + 3, total_pages + 1)))
+        if total_pages not in sample_pages:
+            sample_pages.append(total_pages)
+
+        total_checked = 0
+        since_matched = 0
+        for page in sample_pages:
+            items = _extract_items(self._ticket_page(path, page))
+            total_checked += len(items)
+            since_matched += sum(1 for item in items if _record_is_since(item, since))
+
+        if total_checked == 0:
+            return 0
+        estimated_ratio = since_matched / total_checked
+        return int(estimated_ratio * total_pages * (total_checked / len(sample_pages)))
+
+    def _fetch_all_tickets_since(self, path: str, since: str, first_page: int, total_pages: int) -> list[dict]:
+        """顺序拉取 since 之后的所有工单（用于数量不足 sample_size 时全量返回）。"""
+
+        results: list[dict] = []
+        seen_ids: set[str] = set()
+        for page in range(first_page, total_pages + 1):
+            for item in _extract_items(self._ticket_page(path, page)):
+                if not _record_is_since(item, since):
+                    continue
+                ticket_id = str(item.get("ticketId") or item)
+                if ticket_id in seen_ids:
+                    continue
+                results.append(item)
+                seen_ids.add(ticket_id)
+        return results
 
     def _estimate_first_ticket_page_since(self, path: str, since: str, total_pages: int) -> int:
         """根据首页/末页时间粗略估算 since 日期对应的起始页。"""
@@ -476,6 +614,12 @@ def _json_or_empty(response: httpx.Response) -> Any:
         return response.json()
     except ValueError:
         return {}
+
+
+def _copy_detail(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return a defensive copy so callers cannot mutate cached API details."""
+
+    return copy.deepcopy(value) if value is not None else None
 
 
 def _looks_successful(response: httpx.Response) -> bool:

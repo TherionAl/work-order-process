@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .api import WorkOrderClient
 from .dictionary import DataDictionary
-from .io import write_json
 
 
 TICKET_TYPE = {"1": "问题", "2": "事务", "3": "故障", "4": "任务"}
@@ -112,56 +112,6 @@ class TicketFieldResolver:
         return collected
 
 
-def refresh_ticket_details_from_api(
-    output_dir: Path,
-    dictionary: DataDictionary,
-    client: WorkOrderClient,
-    since: str,
-    sample_size: int,
-    seed: int | None = None,
-) -> dict[str, Any]:
-    """重新抽样拉取工单详情并生成三段式输出文件。
-
-    先从指定日期后的工单列表中抽样，再逐条调用工单详情接口。原始详情先保存为
-    raw；随后调用联系人、客服、客服组等详情接口替换 value；最后使用数据字典
-    将 key 中文化。
-    """
-
-    sampled_tickets = client.fetch_ticket_sample_since(sample_size, since, seed)
-    ticket_ids = [str(row.get("ticketId")).strip() for row in sampled_tickets if row.get("ticketId")]
-
-    raw_details: list[dict[str, Any]] = []
-    value_resolved_details: list[dict[str, Any]] = []
-    chinese_details: list[dict[str, Any]] = []
-    field_resolver = TicketFieldResolver(client.fetch_ticket_fields(), client.fetch_company_fields())
-
-    for ticket_id in ticket_ids:
-        raw_detail = client.fetch_ticket_detail(ticket_id)
-        if not raw_detail:
-            continue
-
-        raw_details.append(raw_detail)
-        value_resolved = resolve_ticket_detail_values(raw_detail, client, field_resolver)
-        value_resolved_details.append(value_resolved)
-        chinese_details.append(dictionary.translate_record("tickets", value_resolved))
-
-    raw_path = output_dir / "ticket_details_raw.json"
-    value_resolved_path = output_dir / "ticket_details_value_resolved.json"
-    chinese_path = output_dir / "ticket_details_chinese.json"
-
-    write_json(raw_path, raw_details)
-    write_json(value_resolved_path, value_resolved_details)
-    write_json(chinese_path, chinese_details)
-
-    return {
-        "ticket_count": len(ticket_ids),
-        "detail_count": len(raw_details),
-        "raw_output": str(raw_path),
-        "value_resolved_output": str(value_resolved_path),
-        "chinese_output": str(chinese_path),
-    }
-
-
 def resolve_ticket_detail_values(
     detail: dict[str, Any],
     client: WorkOrderClient,
@@ -193,89 +143,55 @@ def resolve_ticket_detail_values(
     _replace_enum(row, "createrType", CREATER_TYPE)
     _replace_enum(row, "isDeleted", YES_NO)
 
+    _extract_analytic_dimensions(row)
+
     return row
 
 
-def resolve_ticket_sample_refs(
-    output_dir: Path,
-    dictionary: DataDictionary,
-    client: WorkOrderClient,
-) -> dict[str, Any]:
-    """兼容旧命令：对已存在的 tickets_sample 原始样本做 value 替换和 key 中文化。"""
-
-    tickets = _load_json(output_dir / "tickets_sample_raw.json")
-    if not tickets:
-        tickets = _load_json(output_dir / "tickets_sample.json")
-    field_resolver = TicketFieldResolver(client.fetch_ticket_fields(), client.fetch_company_fields())
-    value_resolved = [resolve_ticket_detail_values(ticket, client, field_resolver) for ticket in tickets]
-    chinese = [dictionary.translate_record("tickets", ticket) for ticket in value_resolved]
-    output_path = output_dir / "tickets_sample_value_resolved.json"
-    chinese_path = output_dir / "tickets_sample_chinese.json"
-    write_json(output_path, value_resolved)
-    write_json(chinese_path, chinese)
-    return {"ticket_count": len(tickets), "value_resolved_output": str(output_path), "chinese_output": str(chinese_path)}
-
-
-def resolve_ticket_details(
-    output_dir: Path,
-    dictionary: DataDictionary,
-    client: WorkOrderClient,
-) -> dict[str, Any]:
-    """兼容旧命令：基于已有 raw 工单详情重新生成后两份文件。"""
-
-    raw_details = _load_json(output_dir / "ticket_details_raw.json")
-    field_resolver = TicketFieldResolver(client.fetch_ticket_fields(), client.fetch_company_fields())
-    value_resolved = [resolve_ticket_detail_values(detail, client, field_resolver) for detail in raw_details]
-    chinese = [dictionary.translate_record("tickets", detail) for detail in value_resolved]
-    value_resolved_path = output_dir / "ticket_details_value_resolved.json"
-    chinese_path = output_dir / "ticket_details_chinese.json"
-    write_json(value_resolved_path, value_resolved)
-    write_json(chinese_path, chinese)
-    return {
-        "detail_count": len(raw_details),
-        "value_resolved_output": str(value_resolved_path),
-        "chinese_output": str(chinese_path),
-    }
-
 
 def _replace_contact(row: dict[str, Any], client: WorkOrderClient) -> None:
-    """用联系人详情接口返回的 name 替换 custUserId。"""
+    """用联系人详情接口返回的 name 补充 cust_user_name；保留 custUserId 原值不变。"""
 
     contact_id = str(row.get("custUserId") or "").strip()
     if not contact_id:
         return
     contact = client.fetch_contact_detail(contact_id)
     if not contact:
+        row["cust_user_name"] = contact_id
         return
-    row["custUserId"] = _first_nonempty(contact.get("name"), contact_id)
+    row["cust_user_name"] = _first_nonempty(contact.get("name"), contact_id)
 
 
 def _replace_support(row: dict[str, Any], key: str, client: WorkOrderClient) -> None:
-    """用客服详情接口返回的 name 替换指定客服 ID 字段。"""
+    """用客服详情接口返回的 name 补充 name 字段；保留原始 ID 字段不变。"""
 
     support_id = str(row.get(key) or "").strip()
     if not support_id or support_id == "0":
         return
+    name_field = _support_name_field(key)
     support = client.fetch_support_detail(support_id)
     if not support:
+        row[name_field] = support_id
         return
-    row[key] = _first_nonempty(support.get("name"), support_id)
+    row[name_field] = _first_nonempty(support.get("name"), support_id)
 
 
 def _replace_support_group(row: dict[str, Any], key: str, client: WorkOrderClient) -> None:
-    """用客服组详情接口返回的 sgName 替换指定客服组 ID 字段。"""
+    """用客服组详情接口返回的 sgName 补充 name 字段；保留原始 ID 字段不变。"""
 
     group_id = str(row.get(key) or "").strip()
     if not group_id or group_id == "0":
         return
+    name_field = _support_group_name_field(key)
     support_group = client.fetch_support_group_detail(group_id)
     if not support_group:
+        row[name_field] = group_id
         return
-    row[key] = _first_nonempty(support_group.get("sgName"), group_id)
+    row[name_field] = _first_nonempty(support_group.get("sgName"), group_id)
 
 
 def _replace_support_list(row: dict[str, Any], key: str, client: WorkOrderClient) -> None:
-    """把逗号分隔的客服 ID 列表逐个替换为客服姓名。"""
+    """把逗号分隔的客服组 ID 列表逐个替换为客服姓名；保留原值不变。"""
 
     ids = _split_id_list(row.get(key))
     if not ids:
@@ -288,7 +204,7 @@ def _replace_support_list(row: dict[str, Any], key: str, client: WorkOrderClient
 
 
 def _replace_support_group_list(row: dict[str, Any], key: str, client: WorkOrderClient) -> None:
-    """把逗号分隔的客服组 ID 列表逐个替换为客服组名称。"""
+    """把逗号分隔的客服组 ID 列表逐个替换为客服组名称；保留原值不变。"""
 
     ids = _split_id_list(row.get(key))
     if not ids:
@@ -301,15 +217,33 @@ def _replace_support_group_list(row: dict[str, Any], key: str, client: WorkOrder
 
 
 def _replace_ticket_template(row: dict[str, Any], client: WorkOrderClient) -> None:
-    """用工单模板详情接口返回的 ticketTemplateName 替换 ticketTemplateId。"""
+    """用工单模板详情接口返回的 ticketTemplateName 补充 ticket_template_name；保留 template_id 原值不变。"""
 
     template_id = str(row.get("ticketTemplateId") or "").strip()
     if not template_id or template_id == "0":
         return
     template = client.fetch_ticket_template_detail(template_id)
     if not template:
+        row["ticket_template_name"] = template_id
         return
-    row["ticketTemplateId"] = _first_nonempty(template.get("ticketTemplateName"), template_id)
+    row["ticket_template_name"] = _first_nonempty(template.get("ticketTemplateName"), template_id)
+
+
+def _support_name_field(key: str) -> str:
+    """给定原始客服 ID 字段名，返回对应的人员姓名字段名。"""
+
+    mapping = {
+        "servicerUserId": "servicer_user_name",
+        "createrId": "creater_name",
+        "deleterId": "deleter_name",
+    }
+    return mapping.get(key, key + "_name")
+
+
+def _support_group_name_field(key: str) -> str:
+    if key == "servicerGroupId":
+        return "servicer_group_name"
+    return key + "_name"
 
 
 def _replace_ticket_custom_fields(
@@ -374,15 +308,6 @@ def _split_id_list(value: Any) -> list[str]:
     return [item.strip() for item in text.replace("，", ",").split(",") if item.strip()]
 
 
-def _load_json(path: Path) -> list[dict[str, Any]]:
-    """读取 JSON 数组文件；文件不存在或不是数组时返回空列表。"""
-
-    if not path.exists():
-        return []
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return data if isinstance(data, list) else []
-
-
 def _first_nonempty(*values: Any) -> Any:
     """返回第一个非空值，用作接口字段缺失时的兜底。"""
 
@@ -390,3 +315,72 @@ def _first_nonempty(*values: Any) -> Any:
         if value is not None and str(value).strip():
             return value
     return ""
+
+
+# ---------------------------------------------------------------------------
+# 分析维度提取：从 custom_fields 中抽主表分析列
+# ---------------------------------------------------------------------------
+
+# field_name 关键字 → 分析维度列名
+ANALYTIC_FIELD_KEYWORDS: dict[str, list[str]] = {
+    "province": ["省", "省份"],
+    "city": ["市", "城市"],
+    "district": ["区", "县", "地区"],
+    "region_text": ["地区", "区域"],
+    "product_line": ["产品线", "产品"],
+    "module_name": ["模块"],
+    "problem_type": ["问题类型", "问题分类"],
+    "customer_type": ["客户类型", "客户性质"],
+    "customer_industry": ["行业"],
+    "department_name": ["部门"],
+    "current_node_name": ["节点"],
+    "current_node_status": ["状态"],
+}
+
+
+def _clean_analytic_value(value: str) -> str:
+    """清洗分析维度原始值：去掉行政区划/地区编码前缀。
+
+    例如 "140000 山西省" → "山西省"，"010" → ""。
+    """
+
+    text = value.strip()
+    # 去掉开头的 6 位行政区划编码 + 可选空格
+    text = re.sub(r"^\d{6}\s*", "", text)
+    # 去掉开头的 2-4 位短编码 + 可选空格（如 "010 北京市"）
+    text = re.sub(r"^\d{2,4}\s+", "", text)
+    # 去掉括号内的编码
+    text = re.sub(r"[（(]\d+[）)]\s*", "", text)
+    return text.strip()
+
+
+def _extract_analytic_dimensions(row: dict[str, Any]) -> None:
+    """从 resolved custom_fields 中提取高频分析维度，注入到 row 顶层。"""
+
+    custom_fields = row.get("custom_fields")
+    if not isinstance(custom_fields, list):
+        return
+
+    for item in custom_fields:
+        if not isinstance(item, dict):
+            continue
+        field_name = str(item.get("key") or "").strip()
+        field_value = item.get("value")
+        if not field_name:
+            continue
+        for analytic_key, keywords in ANALYTIC_FIELD_KEYWORDS.items():
+            if analytic_key in row and row[analytic_key]:
+                continue
+            if any(keyword in field_name for keyword in keywords):
+                if isinstance(field_value, (dict, list)):
+                    row[analytic_key] = _clean_analytic_value(
+                        json.dumps(field_value, ensure_ascii=False),
+                    )
+                elif field_value is not None and str(field_value).strip():
+                    row[analytic_key] = _clean_analytic_value(str(field_value))
+                break
+
+    # current_node_started_at 来自 nodeFieldIntoTime（已在 _replace_unix_timestamp 中转为可读字符串）
+    node_time = row.get("nodeFieldIntoTime") or row.get("node_field_into_time")
+    if node_time and not row.get("current_node_started_at"):
+        row["current_node_started_at"] = node_time

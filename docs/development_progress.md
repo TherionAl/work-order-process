@@ -1,21 +1,35 @@
 # 工单数据处理项目开发进度总结
 
-更新时间：2026-07-06
+更新时间：2026-07-07
 
-## 项目目标
+当前项目目录：
 
-本项目用于从帮我吧工单系统接口获取工单、客户、联系人等数据，并完成：
+```text
+D:\Users\python_project\work_order_process_v1.1
+```
 
-1. 工单按月份获取和本地备份。
+当前版本是组合版：
+
+- 以 Claude_code 版的 MySQL 数据湖能力为主线。
+- 保留根目录版中更实用的 `monthly-tickets`、`--detail-workers`、API 缓存防御性拷贝和结构化测试。
+- 文档已按根目录版的详细说明风格重新整理，并修正为当前组合版实际实现。
+
+## 1. 项目目标
+
+本项目用于从帮我吧工单系统 API 获取工单、客户、联系人等数据，并完成：
+
+1. 工单按月份获取和本地 JSON 备份。
 2. 工单详情字段值解析和中文化。
 3. 工单详情结构化。
-4. 后续写入本机 MySQL，形成可查询、可分析的数据仓库。
+4. MySQL 数据湖入库。
+5. 按月/按年批量同步。
+6. 同步日志、分区维护和后续报表分析支撑。
 
-当前接口认证方式为 HTTP Basic Auth，账号、密码和接口地址优先从 `.env` 或 `agents.md` 读取。
+当前接口认证方式为 HTTP Basic Auth，账号、密码和接口地址优先从 `.env` 读取，其次可从 `agents.md` 读取。
 
-## 当前已实现功能
+## 2. 当前已实现能力
 
-### 1. 2025 年工单按月获取
+### 2.1 月度工单列表导出
 
 已确认工单搜索接口支持按创建月份查询：
 
@@ -23,432 +37,364 @@
 GET /tickets/search.json?query=createDT:YYYY-MM
 ```
 
-项目已实现：
+导出月度工单合集和每月样本详情：
 
 ```powershell
-uv run work-order-process run
+uv run work_order_process_v1.1 run --year 2026
+```
+
+只导出月度工单列表，不拉取详情样本：
+
+```powershell
+uv run work_order_process_v1.1 monthly-tickets --year 2026
+uv run work_order_process_v1.1 monthly-tickets --year 2026 --month 6
 ```
 
 输出目录：
 
 ```text
-output/2025_monthly_tickets/
+output/YYYY_monthly_tickets/
 ```
 
-已成功获取 2025 年 1-12 月工单列表合集，合计：
+每个月文件：
 
 ```text
-769737 条
+YYYY-MM_tickets.json
 ```
 
-### 2. 每月工单详情抽样
+文件包含：
 
-项目会从 2025 年每个月工单中随机抽 3 条详情，并生成三份 JSON：
+- `month`
+- `declared_count`
+- `fetched_count`
+- `ticket_ids`
+- `tickets`
+
+### 2.2 月度样本详情导出
+
+项目会从每个月工单中按固定随机种子抽样，生成三段式 JSON：
 
 ```text
-output/2025_monthly_sample_details/
+output/YYYY_monthly_sample_details/
+  YYYY-MM_sample_details_raw.json
+  YYYY-MM_sample_details_value_resolved.json
+  YYYY-MM_sample_details_chinese.json
 ```
 
-每个月输出：
+含义：
 
-```text
-YYYY-MM_sample_details_raw.json
-YYYY-MM_sample_details_value_resolved.json
-YYYY-MM_sample_details_chinese.json
-```
+- `raw`：工单详情接口原始返回。
+- `value_resolved`：英文 key 保留，解析枚举、人员、模板、自定义字段选项等 value。
+- `chinese`：基于 `value_resolved`，再用数据字典把 key 中文化。
 
-三份文件含义：
-
-- `raw`：接口原始返回。
-- `value_resolved`：英文 key 保留，尽量把 ID、枚举、自定义字段选项替换为可读中文。
-- `chinese`：在 value 替换后，再用数据字典把 key 中文化。
-
-### 3. 2026 年 6 月按模板抽样
-
-已确认搜索接口支持按月份和模板组合查询：
-
-```text
-GET /tickets/search.json?query=createDT:2026-06 ticketTemplateId:<模板ID>
-```
-
-项目已实现命令：
+组合版保留 `--detail-workers`：
 
 ```powershell
-uv run work-order-process template-samples --year 2026 --month 6 --sample-size 3 --seed 202606 --overwrite
+uv run work_order_process_v1.1 run --year 2026 --detail-workers 4
+```
+
+### 2.3 按模板抽样
+
+已实现按月份和模板组合查询：
+
+```text
+GET /tickets/search.json?query=createDT:YYYY-MM ticketTemplateId:<模板ID>
+```
+
+命令：
+
+```powershell
+uv run work_order_process_v1.1 template-samples --year 2026 --month 6 --sample-size 3 --seed 202606 --overwrite
 ```
 
 输出目录：
 
 ```text
-output/2026_06_template_sample_details/
+output/YYYY_MM_template_sample_details/
 ```
 
-已识别 2026 年 6 月有数据的 9 个模板，每个模板抽 3 条，共 27 条详情。
+### 2.4 单条工单详情 Excel 结构化导出
 
-### 4. 单条工单详情 Excel 结构化导出
-
-已实现脚本：
+脚本：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\export_ticket_detail_excel.py 22256891 --output output\ticket_22256891_structured.xlsx
 ```
 
-Excel 内包含两个 sheet：
+Excel 包含两个 sheet：
 
 - `ticket_detail_main`
 - `ticket_detail_custom_fields`
 
-已用工单 `22256891` 验证：
-
-- 主表 sheet：35 行，含表头。
-- 自定义字段 sheet：190 行，含表头。
-
-### 5. MySQL 单条工单入库
-
-已引入依赖：
+组合版继续保留根目录版的结构化模块：
 
 ```text
-pymysql
-```
-
-已实现模块：
-
-```text
-src/work_order_process/mysql_storage.py
-```
-
-已实现命令：
-
-```powershell
-uv run work-order-process mysql-init
-uv run work-order-process mysql-import-ticket --ticket-id 22256891
-```
-
-已在本机 MySQL 验证：
-
-- 数据库：`work_order`
-- `ticket_detail_main` 写入 1 行。
-- `ticket_detail_custom_fields` 写入 189 行。
-
-当前代码中的 MySQL 表结构还是第一版基础结构，后续需要按最新设计升级为分区版和 5 表模型。
-
-## 当前已确认的数据仓库设计
-
-最终建议在同一个 MySQL 数据库中维护 5 张表：
-
-```text
-work_order
-├── ticket_detail_main
-├── ticket_detail_custom_fields
-├── customers
-├── contacts
-└── sync_task_log
-```
-
-### 1. ticket_detail_main
-
-定位：
-
-- 工单唯一主表。
-- 一条工单一行。
-- 保存工单详情顶层字段。
-- 同时冗余高频分析维度字段。
-
-建议特性：
-
-- 数据量大。
-- 按 `create_dt` 月度分区。
-- 2025 年历史数据按月份导入。
-
-建议补充字段：
-
-```text
-create_year
-create_month
-create_month_label
-source_updated_at
-last_sync_at
-sync_status
-sync_error
-province
-city
-district
-region_text
-product_line
-module_name
-problem_type
-customer_type
-customer_industry
-department_id
-department_name
-current_node_name
-current_node_status
-current_node_started_at
-current_node_duration_seconds
-```
-
-说明：
-
-- `create_dt` 用于分区。
-- `create_month_label` 用于按月查询。
-- `source_updated_at` 来自接口 `updateDT`，用于判断远端工单是否更新。
-- `last_sync_at` 是本地最近同步时间。
-
-### 2. ticket_detail_custom_fields
-
-定位：
-
-- 工单自定义字段明细表。
-- 一条 `custom_fields` 字段一行。
-- 用多行承接动态字段，避免形成超宽表。
-
-建议特性：
-
-- 数据量最大。
-- 也建议按 `create_dt` 月度分区。
-- 分区后不建议使用 MySQL 外键，改由程序逻辑保证关联。
-- 冗余年月字段，方便直接按月份查自定义字段。
-
-建议字段：
-
-```text
-ticket_id
-ticket_template_id
-create_dt
-create_year
-create_month
-create_month_label
-field_order
-field_key
-field_name
-field_value
-field_value_json
-field_value_type
-last_sync_at
-```
-
-说明：
-
-- `field_key` 保存原始字段 key，例如 `field_1212`。
-- `field_name` 保存转换后的中文字段名。
-- 普通值保存到 `field_value`。
-- 数组或对象保存到 `field_value_json`，同时也可转文本放入 `field_value`。
-
-### 3. customers
-
-定位：
-
-- 客户/公司统一表。
-- 接口里的“客户”和“公司”本质上是同一类实体。
-
-命名统一：
-
-```text
-客户 = 公司 = customers
-```
-
-建议特性：
-
-- 普通表即可，暂不分区。
-- 用 `customer_id` 去重合并。
-- 用 `source_flags` 记录来源，例如 `customer,company`。
-
-建议字段：
-
-```text
-customer_id
-customer_name
-customer_type
-province
-city
-district
-address
-source_flags
-source_updated_at
-last_sync_at
-```
-
-### 4. contacts
-
-定位：
-
-- 联系人/公司联系人统一表。
-- 接口里的“联系人”和“公司联系人”本质上是同一类实体。
-
-命名统一：
-
-```text
-联系人 = 公司联系人 = contacts
-```
-
-建议特性：
-
-- 普通表即可，暂不分区。
-- 用 `contact_id` 去重合并。
-- 用 `customer_id` 关联 `customers`。
-- 用 `source_flags` 记录来源，例如 `contact,company_contact`。
-
-建议字段：
-
-```text
-contact_id
-contact_name
-phone
-email
-qq
-wechat
-customer_id
-customer_name
-department_name
-position_name
-source_flags
-source_updated_at
-last_sync_at
-```
-
-### 5. sync_task_log
-
-定位：
-
-- 同步任务日志表。
-- 不是业务数据表。
-- 用于记录每次批量同步或导入任务的执行情况。
-
-建议记录：
-
-```text
-id
-task_type
-target_year
-target_month
-target_month_label
-status
-total_count
-success_count
-failed_count
-skipped_count
-started_at
-finished_at
-duration_seconds
-error_message
-extra_json
+src/work_order_process/structured_ticket.py
+src/work_order_process/structured_entities.py
 ```
 
 用途：
 
-- 判断某个月是否跑过。
-- 判断任务是否中断。
-- 记录成功、失败、跳过数量。
-- 记录失败 ID 或错误摘要。
+- 统一工单顶层字段映射。
+- 统一 `custom_fields` 明细行构造。
+- 支持 Excel 导出和测试复用。
 
-## 分区设计结论
+### 2.5 MySQL 5 表数据湖
 
-已确认：
+当前 MySQL 模型已经落地，不再只是设计建议。
 
-1. `ticket_detail_main` 需要按月分区。
-2. `ticket_detail_custom_fields` 数据量更大，也建议按月分区。
-3. 两张表建议使用同一个分区字段：`create_dt`。
-4. 分区表不建议使用 MySQL 外键。
-5. 分区表的主键和唯一键必须包含分区字段。
+默认数据库：
 
-建议分区方式：
-
-```sql
-PARTITION BY RANGE COLUMNS(create_dt) (
-  PARTITION p202501 VALUES LESS THAN ('2025-02-01'),
-  PARTITION p202502 VALUES LESS THAN ('2025-03-01'),
-  ...
-  PARTITION p202512 VALUES LESS THAN ('2026-01-01'),
-  PARTITION pmax VALUES LESS THAN (MAXVALUE)
-);
+```text
+work_order_datalake
 ```
 
-## 工单更新策略
+当前 5 张表：
 
-每次同步工单详情时：
+```text
+ticket_detail_main
+ticket_detail_custom_fields
+customers
+contacts
+sync_task_log
+```
 
-1. 拉取接口详情。
-2. 读取远端 `updateDT`。
-3. 对比本地 `source_updated_at`。
-4. 如果远端 `updateDT` 没有变化：
-   - 可以跳过主数据更新。
-   - 只更新 `last_sync_at` 或记录 skipped。
-5. 如果远端 `updateDT` 有变化：
-   - upsert `ticket_detail_main`。
-   - 删除该 `ticket_id` 的旧 `ticket_detail_custom_fields`。
-   - 插入当前详情里的全部 `custom_fields`。
+其中：
 
-自定义字段表采用整条重刷策略，避免字段新增、删除、顺序变化时留下旧数据。
+- `ticket_detail_main`：按 `create_dt` 月度分区，主键 `(ticket_id, create_dt)`。
+- `ticket_detail_custom_fields`：按 `create_dt` 月度分区，保存动态字段明细。
+- `customers`：客户/公司统一表。
+- `contacts`：联系人/公司联系人统一表。
+- `sync_task_log`：同步任务日志。
 
-## 已验证命令
+详细字段和索引见：
+
+```text
+docs/mysql_schema.md
+```
+
+### 2.6 MySQL 命令
+
+| 命令 | 说明 |
+|---|---|
+| `mysql-init` | 创建数据库和 5 张表，包含 2025/2026 月度分区和 `pmax`。 |
+| `mysql-drop-tables` | 删除全部 5 张表，危险命令。 |
+| `mysql-import-ticket --ticket-id <id>` | 单条工单入库。 |
+| `mysql-import-month --year YYYY --month MM` | 单月全部工单入库。 |
+| `mysql-import-month-v1 --year YYYY --month MM` | 串行旧导入方式，用于调试对比。 |
+| `mysql-import-year --year YYYY` | 全年工单入库。 |
+| `mysql-import-customers` | 导入客户/公司到 `customers`。 |
+| `mysql-import-contacts` | 导入联系人/公司联系人到 `contacts`。 |
+| `mysql-add-partitions --months-ahead N` | 提前创建未来 N 个月分区。 |
+| `mysql-sync-log --log-limit N` | 查看最近同步日志。 |
+
+低并发试跑建议：
+
+```powershell
+uv run work_order_process_v1.1 mysql-import-month --year 2025 --month 1 --max-workers 2 --batch-size 20 --api-rate-limit 3
+```
+
+### 2.7 解析器语义
+
+组合版采用适合数据库分析的语义：
+
+- 保留原始 ID。
+- 新增可读名称字段。
+- 自定义字段值尽量转为可读文本。
+- 高频分析维度从自定义字段抽取到主表。
+
+示例：
+
+| 原始字段 | 当前处理 |
+|---|---|
+| `custUserId` | 保留 ID，新增 `cust_user_name`。 |
+| `servicerUserId` | 保留 ID，新增 `servicer_user_name`。 |
+| `createrId` | 保留 ID，新增 `creater_name`。 |
+| `servicerGroupId` | 保留 ID，新增 `servicer_group_name`。 |
+| `ticketTemplateId` | 保留 ID，新增 `ticket_template_name`。 |
+
+这和根目录旧版中“直接把 ID 替换成中文值”的部分描述不同。当前做法更适合长期数据仓库。
+
+### 2.8 性能和体验优化
+
+已实现：
+
+1. API 实体详情缓存
+   - 联系人、公司、客服、客服组、模板详情会在单次运行中缓存。
+   - 组合版修复为返回防御性深拷贝，调用方修改结果不会污染缓存。
+
+2. 数据字典 PDF 缓存
+   - 首次解析 PDF 后生成 `.parsed.json`。
+   - PDF 未变化时直接读取缓存。
+
+3. 月度导出进度条
+   - 年度/月度导出时显示当前月份和进度。
+
+4. 样本详情并发
+   - `--detail-workers` 控制样本详情拉取线程数。
+
+5. MySQL 批量导入并发
+   - `--max-workers` 控制 API 详情抓取并发。
+   - `--batch-size` 控制每批提交量。
+   - `--api-rate-limit` 控制 API QPS。
+
+6. 同步日志
+   - 每次按月/按年同步会写入 `sync_task_log`。
+
+## 3. 当前验证结果
+
+组合版本地测试：
+
+```powershell
+uv run pytest -q
+```
+
+结果：
+
+```text
+44 passed
+```
+
+已验证 CLI help 包含：
+
+```text
+run
+monthly-tickets
+template-samples
+mysql-init
+mysql-drop-tables
+mysql-import-ticket
+mysql-import-month
+mysql-import-month-v1
+mysql-import-year
+mysql-import-customers
+mysql-import-contacts
+mysql-add-partitions
+mysql-sync-log
+```
+
+已验证参数包含：
+
+```text
+--detail-workers
+--max-workers
+--batch-size
+--api-rate-limit
+--months-ahead
+--log-limit
+```
+
+说明：
+
+- 当前轮没有实际连接真实 API 和 MySQL 执行入库，避免影响你的数据库状态。
+- 后续正式导入前，建议先用测试库低并发试跑一个月。
+
+## 4. 当前文档状态
+
+已按根目录版详细风格检查并更新：
+
+| 文档 | 状态 |
+|---|---|
+| `README.md` | 已改为组合版使用说明，覆盖导出、入库、分区、注意事项。 |
+| `docs/api_data_resolution_mapping.md` | 已改为当前组合版解析语义，修正“保留 ID + 新增名称字段”。 |
+| `docs/mysql_schema.md` | 已改为当前 5 表分区实现的详细 schema 文档。 |
+| `docs/development_progress.md` | 当前文件，已改为组合版实际进度。 |
+| `docs/merged_practical_guide.md` | 新增合并说明和推荐实操流程。 |
+| `agents.md` | 与根目录版一致，未改动。 |
+
+## 5. 推荐实操流程
+
+### 5.1 配置和接口探测
 
 ```powershell
 uv sync
-uv run pytest
-uv run work-order-process run
-uv run work-order-process run --month 3
-uv run work-order-process template-samples --year 2026 --month 6 --sample-size 3 --seed 202606 --overwrite
-uv run work-order-process mysql-init
-uv run work-order-process mysql-import-ticket --ticket-id 22256891
+uv run work_order_process_v1.1 probe
 ```
 
-## 后续开发计划
+### 5.2 先轻量导出一个月列表
 
-### 第一阶段：升级 MySQL 表结构
+```powershell
+uv run work_order_process_v1.1 monthly-tickets --year 2026 --month 6 --overwrite
+```
 
-需要把当前 `mysql_storage.py` 里的基础 DDL 升级为最新 5 表模型：
+### 5.3 再导出一个月样本详情
 
-- `ticket_detail_main` 分区版。
-- `ticket_detail_custom_fields` 分区版。
-- 新增 `customers`。
-- 新增 `contacts`。
-- 新增 `sync_task_log`。
+```powershell
+uv run work_order_process_v1.1 run --year 2026 --month 6 --limit-per-month 20 --detail-workers 2 --overwrite
+```
 
-同时补充：
+### 5.4 初始化测试库
 
-- 年月字段。
-- 同步状态字段。
-- 高频分析维度字段。
+```powershell
+uv run work_order_process_v1.1 mysql-init
+```
 
-### 第二阶段：实现 2025 工单按月入库
+### 5.5 低并发试跑一个月入库
 
-基于已有：
+```powershell
+uv run work_order_process_v1.1 mysql-import-month --year 2025 --month 1 --max-workers 2 --batch-size 20 --api-rate-limit 3
+```
+
+### 5.6 查看同步日志
+
+```powershell
+uv run work_order_process_v1.1 mysql-sync-log --log-limit 20
+```
+
+### 5.7 放大到全年
+
+确认单月结果正常后再运行：
+
+```powershell
+uv run work_order_process_v1.1 mysql-import-year --year 2025 --max-workers 8 --batch-size 100 --api-rate-limit 10
+```
+
+## 6. 后续开发计划
+
+### 6.1 MySQL 集成验证
+
+待在真实测试库验证：
+
+- `mysql-init`
+- `mysql-import-ticket`
+- `mysql-import-month`
+- `mysql-import-customers`
+- `mysql-import-contacts`
+- `mysql-add-partitions`
+- `mysql-sync-log`
+
+重点核对：
+
+- `ticket_detail_main` 行数。
+- `ticket_detail_custom_fields` 明细行数。
+- `source_updated_at` 跳过策略。
+- `sync_task_log` 统计结果。
+- 分区裁剪是否生效。
+
+### 6.2 模块拆分
+
+当前 `mysql_storage.py` 功能较集中，后续可以拆分：
 
 ```text
-output/2025_monthly_tickets/YYYY-MM_tickets.json
+mysql_schema.py        DDL 和分区
+mysql_import.py        工单导入
+mysql_entities.py      客户和联系人导入
+mysql_sync_log.py      同步日志
+mysql_rows.py          行构建
 ```
 
-逐月读取工单 ID，再调用详情接口，写入：
+### 6.3 分析维度增强
 
-- `ticket_detail_main`
-- `ticket_detail_custom_fields`
-- `sync_task_log`
+根据实际报表需求继续补充：
 
-### 第三阶段：客户和联系人入库
+- 地区清洗。
+- 产品线归一。
+- 模块名归一。
+- 问题类型归一。
+- 客服部门映射。
+- 节点流转历史。
 
-把以下接口结果统一入库：
-
-- 客户接口 -> `customers`
-- 公司接口 -> `customers`
-- 联系人接口 -> `contacts`
-- 公司联系人接口 -> `contacts`
-
-使用 `source_flags` 记录实体出现过的接口来源。
-
-### 第四阶段：分析维度增强
-
-根据实际分析需求，从 `custom_fields` 中抽取高频字段到 `ticket_detail_main`：
-
-- 地区
-- 产品线
-- 模块
-- 问题类型
-- 客户性质
-- 当前节点
-- 当前节点耗时
-- 内部部门
-
-后续如果需要更精细的节点流转分析，再新增：
+可能新增：
 
 ```text
 ticket_node_history
@@ -457,4 +403,23 @@ dim_department
 support_department_map
 ```
 
-这些属于中期扩展，不建议第一阶段一次性做重。
+### 6.4 测试增强
+
+建议增加：
+
+- MySQL DDL 生成测试。
+- 分区月份生成测试。
+- sync_task_log 写入测试。
+- 客户/联系人行构建测试。
+- 批量导入失败恢复测试。
+
+## 7. 当前结论
+
+组合版已经适合作为后续主线：
+
+- 轻量 JSON 导出能力保留。
+- MySQL 数据湖能力已合入。
+- 文档已按根目录版详细风格更新。
+- 测试已通过。
+
+正式跑大量数据前，仍建议先在测试库低并发验证一个月数据。 

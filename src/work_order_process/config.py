@@ -9,10 +9,20 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+# ---------------------------------------------------------------------------
+# Windows 控制台默认 GBK 编码，Python 输出 UTF-8 会乱码。
+# 强制 stdout/stderr 使用 UTF-8，一劳永逸解决所有入口的中文乱码。
+# ---------------------------------------------------------------------------
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -22,7 +32,11 @@ DEFAULT_DICTIONARY_PATH = PROJECT_ROOT / "数据字典-帮我吧.pdf"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output"
 
 
-def _read_agents_defaults(path: Path = AGENTS_FILE) -> dict[str, str]:
+def _read_agents_defaults(path: Path | None = None) -> dict[str, str]:
+    """从 agents.md 中读取用户名、密码和接口地址前缀。"""
+
+    if path is None:
+        path = AGENTS_FILE
     """从 agents.md 中读取用户名、密码和接口地址前缀。"""
 
     if not path.exists():
@@ -88,15 +102,31 @@ class Settings:
     mysql: MySQLConfig
 
 
+class ConfigError(RuntimeError):
+    """配置缺失或不符合预期时抛出的异常。"""
+
+    pass
+
+
 def load_settings() -> Settings:
     """加载项目运行配置。
 
     默认会读取项目根目录下的 .env 和 agents.md。接口路径保留多个候选值，
     是为了兼容接口文档和实际环境中可能存在的命名差异。
+
+    启动时校验必填字段，避免运行到一半才发现凭据缺失。
     """
 
     load_dotenv(PROJECT_ROOT / ".env")
     agents = _read_agents_defaults()
+
+    username = os.getenv("WORKORDER_USERNAME") or agents.get("username", "")
+    password = os.getenv("WORKORDER_PASSWORD") or agents.get("password", "")
+    if not username or not password:
+        raise ConfigError(
+            "缺少接口认证凭据。请在 .env 中设置 WORKORDER_USERNAME 和 WORKORDER_PASSWORD，"
+            "或在 agents.md 中填写 USERNAME 和 PASSWORD。"
+        )
 
     base_url = os.getenv("WORKORDER_BASE_URL") or agents.get("base_url") or DEFAULT_BASE_URL
     base_url = base_url.rstrip("/")
@@ -130,8 +160,8 @@ def load_settings() -> Settings:
     )
 
     return Settings(
-        username=os.getenv("WORKORDER_USERNAME") or agents.get("username", ""),
-        password=os.getenv("WORKORDER_PASSWORD") or agents.get("password", ""),
+        username=username,
+        password=password,
         base_url=base_url,
         dictionary_path=Path(os.getenv("WORKORDER_DICTIONARY_PATH", str(DEFAULT_DICTIONARY_PATH))),
         output_dir=Path(os.getenv("WORKORDER_OUTPUT_DIR", str(DEFAULT_OUTPUT_DIR))),
@@ -145,6 +175,6 @@ def load_settings() -> Settings:
             port=int(os.getenv("WORKORDER_MYSQL_PORT", "3306")),
             user=os.getenv("WORKORDER_MYSQL_USER", "root"),
             password=os.getenv("WORKORDER_MYSQL_PASSWORD", ""),
-            database=os.getenv("WORKORDER_MYSQL_DATABASE", "work_order"),
+            database=os.getenv("WORKORDER_MYSQL_DATABASE", "work_order_datalake"),
         ),
     )

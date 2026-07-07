@@ -3,6 +3,9 @@
 本模块读取《数据字典-帮我吧.pdf》，提取 user、contacter、tickets、
 user_ticket_reply 等表的字段说明，并提供英文字段名到中文标签的转换能力。
 如果 PDF 文本抽取失败或缺少某些表，会使用内置 fallback 字典兜底。
+
+首次解析 PDF 后会自动在同目录写入 .parsed.json 缓存文件，后续启动时
+若 PDF 未修改则直接读取缓存，避免重复解析 4MB PDF 的耗时。
 """
 
 from __future__ import annotations
@@ -120,7 +123,17 @@ class DataDictionary:
 
         PDF 是最终中文字段名的主要来源；接口返回字段和 PDF 字段存在少量命名差异时，
         会通过 FIELD_ALIASES 做别名匹配。
+
+        首次解析后会在 PDF 同目录写入 .parsed.json 缓存，后续若 PDF 未修改
+        则直接读取缓存，避免重复解析。
         """
+
+        cache_path = path.with_suffix(path.suffix + ".parsed.json")
+        if cache_path.exists() and cache_path.stat().st_mtime >= path.stat().st_mtime:
+            try:
+                return cls.from_json(cache_path)
+            except (json.JSONDecodeError, KeyError):
+                pass  # 缓存损坏，重新解析
 
         text = "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
         text = normalize_text(text.replace("\r\n", "\n").replace("\r", "\n"))
@@ -140,6 +153,32 @@ class DataDictionary:
             for table in missing:
                 tables[table] = fallback.tables.get(table, [])
 
+        instance = cls(tables)
+        # 写入缓存
+        try:
+            instance.save_json(cache_path)
+        except OSError:
+            pass  # 缓存写入失败不影响主流程
+        return instance
+
+    @classmethod
+    def from_json(cls, path: Path) -> "DataDictionary":
+        """从缓存 JSON 文件读取数据字典。"""
+
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        tables: dict[str, list[FieldDefinition]] = {}
+        for table_name, fields in raw.items():
+            tables[table_name] = [
+                FieldDefinition(
+                    table=f.get("table", table_name),
+                    table_title=f.get("table_title", table_name),
+                    field=f["field"],
+                    field_type=f.get("field_type", ""),
+                    comment=f.get("comment", ""),
+                    label=f.get("label", f["field"]),
+                )
+                for f in fields
+            ]
         return cls(tables)
 
     def field(self, table: str, key: str) -> FieldDefinition | None:

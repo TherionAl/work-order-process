@@ -13,3 +13,4 @@ wheels/
 .env
 output/
 .pytest_cache/
+*.parsed.json
