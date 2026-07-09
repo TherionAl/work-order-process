@@ -19,13 +19,14 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 from typing import Any
 
 from rich.console import Console
 from rich.table import Table
 
 from .api import ApiError, WorkOrderClient
-from .config import ConfigError, load_settings
+from .config import ConfigError, PROJECT_ROOT, load_settings
 from .dictionary import DataDictionary
 from .mysql_storage import (
     add_future_partitions,
@@ -45,6 +46,7 @@ from .monthly_export import (
     export_year_monthly_tickets,
     export_year_monthly_tickets_and_samples,
 )
+from .personnel_import import import_personnel_xls_to_mysql
 
 
 console = Console()
@@ -61,6 +63,7 @@ def main() -> None:
             "mysql-init", "mysql-drop-tables",
             "mysql-import-ticket", "mysql-import-month", "mysql-import-month-v1", "mysql-import-year",
             "mysql-import-customers", "mysql-import-contacts",
+            "mysql-import-personnel",
             "mysql-add-partitions", "mysql-sync-log",
             "probe", "dictionary",
         ],
@@ -84,6 +87,11 @@ def main() -> None:
     parser.add_argument("--detail-workers", type=int, default=4, help="样本详情并发获取线程数，默认 4。")
     parser.add_argument("--limit-per-month", type=int, default=None, help="调试用：限制每个月最多获取多少条列表记录。")
     parser.add_argument("--overwrite", action="store_true", help="覆盖已有月度输出文件。")
+    parser.add_argument(
+        "--personnel-file",
+        default=str(PROJECT_ROOT / "人员信息名单20260708.xls"),
+        help="mysql-import-personnel: personnel .xls file path.",
+    )
     parser.add_argument(
         "--customers-source",
         choices=["companies", "customers", "both"],
@@ -154,6 +162,10 @@ def main() -> None:
         console.print("[yellow]全部 5 张表已删除。[/yellow]")
         return
 
+    if args.command == "mysql-import-personnel":
+        report = import_personnel_xls_to_mysql(settings.mysql, Path(args.personnel_file))
+        _print_personnel_import_report(report)
+        return
     if args.command == "mysql-add-partitions":
         months_list = generate_months_ahead(args.months_ahead)
         created = add_future_partitions(settings.mysql, months_list)
@@ -330,6 +342,18 @@ def _print_sync_log(settings: Any) -> None:
         )
     console.print(table)
 
+
+def _print_personnel_import_report(report: dict[str, Any]) -> None:
+    """Print local personnel import summary."""
+
+    table = Table("Table", "Source", "Rows", "Affected")
+    table.add_row(
+        str(report["table"]),
+        str(report["source_file"]),
+        str(report["total_count"]),
+        str(report["affected_rows"]),
+    )
+    console.print(table)
 
 def _get_log_limit() -> int:
     """返回 --log-limit 的值（延迟读取，避免全局 argparse 依赖）。"""
