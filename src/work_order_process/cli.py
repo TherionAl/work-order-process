@@ -46,6 +46,7 @@ from .monthly_export import (
     export_year_monthly_tickets,
     export_year_monthly_tickets_and_samples,
 )
+from .erp_import import import_erp_xlsx
 from .personnel_import import import_personnel_xls_to_mysql
 from .time_metrics import (
     DEFAULT_CALENDAR_PATH,
@@ -71,6 +72,7 @@ def main() -> None:
             "mysql-import-customers", "mysql-import-contacts",
             "mysql-import-personnel",
             "mysql-add-partitions", "mysql-sync-log",
+            "import-erp",
             "metric-month", "metric-ticket",
             "probe", "dictionary",
         ],
@@ -82,7 +84,8 @@ def main() -> None:
             "mysql-import-ticket: 单条入库；mysql-import-month: 单月入库；"
             "mysql-import-year: 全年入库；mysql-import-customers: 导入客户；"
             "mysql-import-contacts: 导入联系人；mysql-add-partitions: 增加分区；"
-            "mysql-sync-log: 查看同步日志；probe: 探测接口；dictionary: 导出数据字典。"
+            "mysql-sync-log: 查看同步日志；import-erp: ERP新旧数据Excel入库；"
+            "probe: 探测接口；dictionary: 导出数据字典。"
         ),
     )
     parser.add_argument("--ticket-id", default=None, help="MySQL 入库时指定单条工单 ID。")
@@ -145,6 +148,11 @@ def main() -> None:
         default=10,
         help="并发导入时 API QPS 上限，默认 10。",
     )
+    parser.add_argument(
+        "--erp-file",
+        default=None,
+        help="import-erp: ERP新旧合并数据 Excel 文件路径。",
+    )
     args = parser.parse_args()
 
     settings = load_settings()
@@ -176,6 +184,13 @@ def main() -> None:
     if args.command == "mysql-import-personnel":
         report = import_personnel_xls_to_mysql(settings.mysql, Path(args.personnel_file))
         _print_personnel_import_report(report)
+        return
+
+    if args.command == "import-erp":
+        if not args.erp_file:
+            raise ApiError("import-erp 需要传入 --erp-file。")
+        report = import_erp_xlsx(settings.mysql, Path(args.erp_file))
+        _print_erp_import_report(report)
         return
 
     if args.command == "mysql-add-partitions":
@@ -386,6 +401,17 @@ def _print_sync_log(settings: Any) -> None:
             str(row[0]), row[1], row[2] or "-", row[3],
             str(row[4]), str(row[5]), str(row[6]), str(row[7]), str(row[8] or ""),
         )
+    console.print(table)
+
+
+def _print_erp_import_report(report: dict[str, Any]) -> None:
+    """输 ERP 导入摘要。"""
+    table = Table("Metric", "Value")
+    table.add_row("File", report["file"])
+    table.add_row("Rows", str(report["rows"]))
+    table.add_row("Inserted", str(report["inserted"]))
+    table.add_row("Skipped", str(report["skipped"]))
+    table.add_row("Duration (s)", str(report["seconds"]))
     console.print(table)
 
 

@@ -17,3 +17,6 @@ output/
 
 dump.sql.gz
 personnel_data.sql
+*.xls
+*.xlsx
+*.docx
