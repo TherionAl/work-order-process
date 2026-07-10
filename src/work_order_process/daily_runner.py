@@ -34,7 +34,7 @@ logging.basicConfig(
 logger = logging.getLogger("daily_runner")
 
 settings = load_settings()
-dictionary = DataDictionary.from_pdf(settings.dict_path)
+dictionary = DataDictionary.from_pdf(settings.dictionary_path)
 sched = BlockingScheduler(timezone="Asia/Shanghai")
 
 
