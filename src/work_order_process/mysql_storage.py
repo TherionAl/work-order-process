@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import re
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -29,7 +28,7 @@ from typing import Any, Iterable
 from .api import ApiError, WorkOrderClient
 from .config import MySQLConfig
 from .dictionary import DataDictionary
-from .resolver import TicketFieldResolver, resolve_ticket_detail_values
+from .resolver import TicketFieldResolver, _split_id_list, resolve_ticket_detail_values
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +72,8 @@ MAIN_FIELD_COLUMN_MAP = {
     "descriptattachments": "descript_attachments",
     # 以下为 resolver 提供的附加字段（不在 API 顶层中，由 *_name 后缀注入）
     "cust_user_name": "cust_user_name",
+    "company_id": "company_id",
+    "company_name": "company_name",
     "servicer_user_name": "servicer_user_name",
     "creater_name": "creater_name",
     "servicer_group_name": "servicer_group_name",
@@ -85,6 +86,7 @@ ANALYTIC_COLUMNS = [
     "city",
     "district",
     "region_text",
+    "ticket_category",
     "product_line",
     "module_name",
     "problem_type",
@@ -154,6 +156,8 @@ CREATE TABLE IF NOT EXISTS ticket_detail_main (
   descript MEDIUMTEXT NULL COMMENT '描述',
   cust_user_id VARCHAR(255) NULL COMMENT '联系人ID',
   cust_user_name VARCHAR(255) NULL COMMENT '联系人姓名',
+  company_id VARCHAR(255) NULL COMMENT '公司/客户ID（来自联系人详情）',
+  company_name VARCHAR(500) NULL COMMENT '公司名称（来自公司详情）',
   servicer_user_id VARCHAR(255) NULL COMMENT '客服ID',
   servicer_user_name VARCHAR(255) NULL COMMENT '客服姓名',
   cc_user_id_list TEXT NULL COMMENT '抄送客服ID列表',
@@ -198,6 +202,7 @@ CREATE TABLE IF NOT EXISTS ticket_detail_main (
   city VARCHAR(50) NULL COMMENT '城市',
   district VARCHAR(50) NULL COMMENT '区县',
   region_text VARCHAR(255) NULL COMMENT '地区原始文本',
+  ticket_category VARCHAR(50) NULL COMMENT '工单类别',
   product_line VARCHAR(255) NULL COMMENT '产品线',
   module_name VARCHAR(255) NULL COMMENT '模块名称',
   problem_type VARCHAR(255) NULL COMMENT '问题类型',
@@ -358,6 +363,23 @@ def ensure_mysql_schema(config: MySQLConfig) -> None:
             cursor.execute(CUSTOMERS_DDL)
             cursor.execute(CONTACTS_DDL)
             cursor.execute(SYNC_TASK_LOG_DDL)
+            _ensure_ticket_detail_main_columns(cursor, config.database)
+
+
+def _ensure_ticket_detail_main_columns(cursor: Any, database: str) -> None:
+    """Add columns introduced after the initial schema to existing tables."""
+
+    cursor.execute(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+        "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'ticket_detail_main'",
+        (database,),
+    )
+    existing = {str(row[0]) for row in cursor.fetchall()}
+    if "ticket_category" not in existing:
+        cursor.execute(
+            "ALTER TABLE ticket_detail_main "
+            "ADD COLUMN ticket_category VARCHAR(50) NULL COMMENT '工单类别' AFTER region_text"
+        )
 
 
 def drop_mysql_tables(config: MySQLConfig) -> None:
@@ -476,29 +498,25 @@ def generate_months_ahead(months_count: int) -> list[tuple[int, int]]:
 # 工单导入
 # ---------------------------------------------------------------------------
 
-def _load_or_fetch_month_ticket_rows(
+def _fetch_month_ticket_rows(
     client: WorkOrderClient,
     year: int,
     month: int,
     per_page: int,
-    output_dir: Path | None = None,
+    limit_per_month: int | None = None,
 ) -> tuple[str, list[dict[str, Any]], str]:
-    """Load a complete local monthly ticket list first; fall back to the API."""
+    """Fetch monthly ticket list directly from the API."""
 
     from .monthly_export import build_month_label, fetch_month_ticket_rows
 
     month_label = build_month_label(year, month)
-    if output_dir is not None:
-        local_path = output_dir / f"{year}_monthly_tickets" / f"{month_label}_tickets.json"
-        if local_path.exists():
-            data = json.loads(local_path.read_text(encoding="utf-8"))
-            tickets = data.get("tickets") if isinstance(data, dict) else None
-            declared = int(data.get("declared_count") or 0) if isinstance(data, dict) else 0
-            fetched = int(data.get("fetched_count") or 0) if isinstance(data, dict) else 0
-            if isinstance(tickets, list) and (declared == 0 or fetched >= declared):
-                return month_label, [item for item in tickets if isinstance(item, dict)], str(local_path)
-
-    ticket_report = fetch_month_ticket_rows(client, year, month, per_page=per_page)
+    ticket_report = fetch_month_ticket_rows(
+        client,
+        year,
+        month,
+        per_page=per_page,
+        limit_per_month=limit_per_month,
+    )
     return month_label, ticket_report.get("tickets", []), "api"
 
 
@@ -533,16 +551,17 @@ def import_month_tickets_serial(
     year: int,
     month: int,
     per_page: int = 5000,
+    limit_per_month: int | None = None,
     output_dir: Path | None = None,
 ) -> dict[str, Any]:
     """拉取某个月的全部工单详情，逐条串行导入（调试用，速度较慢）。"""
 
-    month_label, ticket_rows, ticket_source = _load_or_fetch_month_ticket_rows(
+    month_label, ticket_rows, ticket_source = _fetch_month_ticket_rows(
         client,
         year,
         month,
         per_page=per_page,
-        output_dir=output_dir,
+        limit_per_month=limit_per_month,
     )
     if not ticket_rows:
         return {
@@ -603,7 +622,7 @@ def import_month_tickets_serial(
                 continue
             value_detail = resolve_ticket_detail_values(raw_detail, client, field_resolver)
             detail_map = {ticket_id: (raw_detail, value_detail)}
-            batch_result = _commit_batch_with_retries(config, detail_map, attempts=1)
+            batch_result = _commit_batch_atomic(config, detail_map)
             imported += batch_result["imported"]
             updated += batch_result["updated"]
             skipped += batch_result["skipped"]
@@ -641,19 +660,25 @@ def import_month_tickets_to_mysql(
     year: int,
     month: int,
     per_page: int = 5000,
+    limit_per_month: int | None = None,
     max_workers: int = 8,
     batch_size: int = 100,
     api_rate_limit: int = 10,
-    output_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Import one month of tickets, preferring an existing local monthly list."""
+    """Import one month of tickets directly from the API.
 
-    month_label, ticket_rows, ticket_source = _load_or_fetch_month_ticket_rows(
+    优化策略：
+    - 全月工单列表中的实体 ID 去重后预取，后续逐条解析直接命中缓存；
+    - 信号量跨批次共享，统一控制 API QPS；
+    - 每批用独立连接 + 独立事务，单批失败不影响其他批次。
+    """
+
+    month_label, ticket_rows, ticket_source = _fetch_month_ticket_rows(
         client,
         year,
         month,
         per_page=per_page,
-        output_dir=output_dir,
+        limit_per_month=limit_per_month,
     )
     if not ticket_rows:
         return {
@@ -667,14 +692,56 @@ def import_month_tickets_to_mysql(
             "failed_ids": [],
         }
 
-    field_resolver = TicketFieldResolver(client.fetch_ticket_fields(), client.fetch_company_fields())
-    ticket_ids = [str(row.get("ticketId") or "").strip() for row in ticket_rows if row.get("ticketId")]
-
     ensure_mysql_schema(config)
+    ticket_ids, already_current = _filter_ticket_rows_for_import(config, ticket_rows, month_label)
+    if not ticket_ids:
+        _write_sync_log(
+            config,
+            task_type="ticket_detail",
+            target_year=year,
+            target_month=month,
+            month_label=month_label,
+            status="success",
+            total_count=len(ticket_rows),
+            success_count=0,
+            failed_count=0,
+            skipped_count=already_current,
+            duration_seconds=0,
+            error_message=None,
+            extra_json={
+                "ticket_source": ticket_source,
+                "limit_per_month": limit_per_month,
+                "prefiltered": True,
+            },
+        )
+        return {
+            "month": month_label,
+            "ticket_source": ticket_source,
+            "total_in_month": len(ticket_rows),
+            "imported": 0,
+            "updated": 0,
+            "skipped": already_current,
+            "failed": 0,
+            "failed_ids": [],
+            "custom_field_rows": 0,
+            "duration_seconds": 0,
+        }
 
+    field_resolver = TicketFieldResolver(client.fetch_ticket_fields(), client.fetch_company_fields())
+    pending_ids = set(ticket_ids)
+    pending_rows = [
+        row
+        for row in ticket_rows
+        if str(row.get("ticketId") or "").strip() in pending_ids
+    ]
+
+    # ── 1. 预取实体详情（去重后并发请求）────────────────────────
+    _prefetch_ticket_entities(client, pending_rows, field_resolver, max_workers, api_rate_limit)
+
+    # ── 2. 分批次获取详情 + 入库 ─────────────────────────────────
     imported = 0
     updated = 0
-    skipped = 0
+    skipped = already_current
     failed_ids: list[str] = []
     total_custom = 0
     started_at = datetime.now()
@@ -683,8 +750,8 @@ def import_month_tickets_to_mysql(
     for batch_start in range(0, len(ticket_ids), batch_size):
         batch = ticket_ids[batch_start:batch_start + batch_size]
         detail_map = _fetch_batch_details(client, batch, field_resolver, api_semaphore, max_workers=max_workers)
-        missing_detail_ids = [ticket_id for ticket_id in batch if ticket_id not in detail_map]
-        batch_result = _commit_batch_with_retries(config, detail_map)
+        missing_detail_ids = [tid for tid in batch if tid not in detail_map]
+        batch_result = _commit_batch_atomic(config, detail_map)
         imported += batch_result["imported"]
         updated += batch_result["updated"]
         skipped += batch_result["skipped"]
@@ -701,19 +768,26 @@ def import_month_tickets_to_mysql(
         target_month=month,
         month_label=month_label,
         status=overall_status,
-        total_count=len(ticket_ids),
+        total_count=len(ticket_rows),
         success_count=imported + updated,
         failed_count=len(failed_ids),
         skipped_count=skipped,
         duration_seconds=duration,
         error_message=None if overall_status == "success" else f"{len(failed_ids)} tickets failed",
-        extra_json={"failed_ids": failed_ids, "ticket_source": ticket_source} if failed_ids else {"ticket_source": ticket_source},
+        extra_json={
+            "failed_ids": failed_ids,
+            "ticket_source": ticket_source,
+            "limit_per_month": limit_per_month,
+        } if failed_ids else {
+            "ticket_source": ticket_source,
+            "limit_per_month": limit_per_month,
+        },
     )
 
     return {
         "month": month_label,
         "ticket_source": ticket_source,
-        "total_in_month": len(ticket_ids),
+        "total_in_month": len(ticket_rows),
         "imported": imported,
         "updated": updated,
         "skipped": skipped,
@@ -722,6 +796,60 @@ def import_month_tickets_to_mysql(
         "custom_field_rows": total_custom,
         "duration_seconds": duration,
     }
+
+
+def _prefetch_ticket_entities(
+    client: WorkOrderClient,
+    ticket_rows: list[dict[str, Any]],
+    field_resolver: TicketFieldResolver,
+    max_workers: int,
+    api_rate_limit: int,
+) -> None:
+    """从工单列表中提取所有引用的实体 ID，去重后批量预取详情。
+
+    预取后，后续逐条调用 resolve_ticket_detail_values 时，
+    fetch_contact_detail / fetch_company_detail 等几乎全部命中 LRU 缓存。
+    """
+
+    contact_ids: set[str] = set()
+    support_ids: set[str] = set()
+    group_ids: set[str] = set()
+    template_ids: set[str] = set()
+
+    for row in ticket_rows:
+        if cust := _str_or_none(row.get("custUserId")):
+            contact_ids.add(cust)
+        for key in ("servicerUserId", "createrId", "deleterId"):
+            if sid := _str_or_none(row.get(key)):
+                support_ids.add(sid)
+        if gid := _str_or_none(row.get("servicerGroupId")):
+            group_ids.add(gid)
+        if tid := _str_or_none(row.get("ticketTemplateId")):
+            template_ids.add(tid)
+        # ccUserIdList 里的客服 ID
+        for cid_list_field in ("ccUserIdList",):
+            for item in _split_id_list(row.get(cid_list_field)):
+                support_ids.add(item)
+        for gid_list_field in ("ccGroupIdList",):
+            for item in _split_id_list(row.get(gid_list_field)):
+                group_ids.add(item)
+
+    semaphore = threading.Semaphore(max(1, api_rate_limit))
+
+    client.prefetch_entities(
+        contacts=contact_ids,
+        companies=set(),  # 公司 ID 在解析联系人后才能确定，无法提前预取
+        supports=support_ids,
+        groups=group_ids,
+        templates=template_ids,
+        max_workers=max_workers,
+        semaphore=semaphore,
+    )
+
+
+def _str_or_none(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text if text and text != "0" else None
 
 
 def _filter_ticket_rows_for_import(
@@ -745,7 +873,7 @@ def _filter_ticket_rows_for_import(
     if not candidates:
         return [], 0
 
-    existing: dict[tuple[str, datetime], datetime | None] = {}
+    existing: dict[str, datetime | None] = {}
     pymysql = _pymysql()
     with pymysql.connect(
         host=config.host,
@@ -762,22 +890,21 @@ def _filter_ticket_rows_for_import(
                 chunk = ids[start:start + 1000]
                 placeholders = ", ".join(["%s"] * len(chunk))
                 cursor.execute(
-                    "SELECT ticket_id, create_dt, source_updated_at "
+                    "SELECT ticket_id, source_updated_at "
                     "FROM ticket_detail_main "
                     f"WHERE create_month_label = %s AND ticket_id IN ({placeholders})",
                     [month_label, *chunk],
                 )
-                for ticket_id, create_dt, source_updated_at in cursor.fetchall():
-                    if create_dt is not None:
-                        existing[(str(ticket_id), create_dt)] = source_updated_at
+                for ticket_id, source_updated_at in cursor.fetchall():
+                    existing[str(ticket_id)] = source_updated_at
 
     pending: list[str] = []
     skipped = 0
-    for ticket_id, create_dt, update_dt in candidates:
-        if create_dt is None or update_dt is None:
+    for ticket_id, _create_dt, update_dt in candidates:
+        if update_dt is None:
             pending.append(ticket_id)
             continue
-        source_updated = existing.get((ticket_id, create_dt))
+        source_updated = existing.get(ticket_id)
         if source_updated is not None and _same_datetime(source_updated, update_dt):
             skipped += 1
         else:
@@ -791,12 +918,15 @@ def _same_datetime(left: datetime, right: datetime) -> bool:
     return left.replace(microsecond=0) == right.replace(microsecond=0)
 
 
-def _commit_batch_with_retries(
+def _commit_batch_atomic(
     config: MySQLConfig,
     detail_map: dict[str, tuple[dict[str, Any], dict[str, Any]]],
-    attempts: int = 3,
 ) -> dict[str, Any]:
-    """Commit one batch with a fresh MySQL connection and limited retries."""
+    """Commit one batch in a single connection + single transaction.
+
+    The batch already has row-by-row fallback inside _commit_batch,
+    so no outer retry is needed.
+    """
 
     if not detail_map:
         return {
@@ -807,33 +937,26 @@ def _commit_batch_with_retries(
             "custom_rows": 0,
         }
 
-    last_exc: Exception | None = None
     pymysql = _pymysql()
-    for attempt in range(max(1, attempts)):
-        try:
-            with pymysql.connect(
-                host=config.host,
-                port=config.port,
-                user=config.user,
-                password=config.password,
-                database=config.database,
-                charset="utf8mb4",
-                autocommit=False,
-            ) as connection:
-                return _commit_batch(connection, detail_map)
-        except Exception as exc:
-            last_exc = exc
-            if attempt < attempts - 1:
-                time.sleep(2 * (attempt + 1))
-
-    return {
-        "imported": 0,
-        "updated": 0,
-        "skipped": 0,
-        "failed_ids": list(detail_map.keys()),
-        "custom_rows": 0,
-        "error": str(last_exc) if last_exc else "",
-    }
+    try:
+        with pymysql.connect(
+            host=config.host,
+            port=config.port,
+            user=config.user,
+            password=config.password,
+            database=config.database,
+            charset="utf8mb4",
+            autocommit=False,
+        ) as connection:
+            return _commit_batch(connection, detail_map)
+    except Exception:
+        return {
+            "imported": 0,
+            "updated": 0,
+            "skipped": 0,
+            "failed_ids": [str(tid) for tid in detail_map.keys()],
+            "custom_rows": 0,
+        }
 
 
 def _fetch_batch_details(
@@ -888,10 +1011,16 @@ def _commit_batch(
     try:
         with connection.cursor() as cursor:
             for main_row, custom_rows in batch_rows:
-                _upsert_ticket_detail(cursor, main_row, custom_rows)
+                action = _upsert_ticket_detail(cursor, main_row, custom_rows)
+                if action == "updated":
+                    updated += 1
+                    custom_rows_total += len(custom_rows)
+                elif action == "skipped":
+                    skipped += 1
+                else:
+                    imported += 1
+                    custom_rows_total += len(custom_rows)
         connection.commit()
-        imported = len(batch_rows)
-        custom_rows_total = sum(len(rows) for _, rows in batch_rows)
     except Exception:
         _safe_rollback(connection)
         for main_row, custom_rows in batch_rows:
@@ -901,11 +1030,12 @@ def _commit_batch(
                 connection.commit()
                 if action == "updated":
                     updated += 1
+                    custom_rows_total += len(custom_rows)
                 elif action == "skipped":
                     skipped += 1
                 else:
                     imported += 1
-                custom_rows_total += len(custom_rows)
+                    custom_rows_total += len(custom_rows)
             except Exception:
                 failed_ids.append(str(main_row.get("ticket_id", "")))
                 _safe_rollback(connection)
@@ -935,6 +1065,7 @@ def import_year_tickets_to_mysql(
     year: int,
     months: Iterable[int] | None = None,
     per_page: int = 5000,
+    limit_per_month: int | None = None,
     max_workers: int = 8,
     batch_size: int = 100,
     api_rate_limit: int = 10,
@@ -975,9 +1106,9 @@ def import_year_tickets_to_mysql(
             progress.update(task, description=f"导入 {month_label}")
             report = import_month_tickets_to_mysql(
                 config, dictionary, client, year, month,
-                per_page=per_page, max_workers=max_workers,
+                per_page=per_page, limit_per_month=limit_per_month,
+                max_workers=max_workers,
                 batch_size=batch_size, api_rate_limit=api_rate_limit,
-                output_dir=output_dir,
             )
             month_reports.append(report)
             total_imported += report["imported"]
@@ -1241,7 +1372,14 @@ def build_ticket_detail_main_row(value_detail: dict[str, Any]) -> dict[str, Any]
 
     # 分析维度字段（由 resolver 提供）
     for column in ANALYTIC_COLUMNS:
-        row[column] = _text_or_none(value_detail.get(column))
+        raw_val = value_detail.get(column)
+        if column in DATETIME_COLUMNS:
+            row[column] = _to_datetime(raw_val)
+        else:
+            row[column] = _text_or_none(raw_val)
+
+    if not row.get("ticket_category"):
+        row["ticket_category"] = "原单"
 
     # create_dt 派生列
     create_dt = row.get("create_dt")

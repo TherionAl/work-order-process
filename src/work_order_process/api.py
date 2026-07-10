@@ -10,15 +10,19 @@
 
 from __future__ import annotations
 
+import json
 import os
 import copy
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 import math
 import random
+import re
+import threading
 import time
-from typing import Any, TypedDict
+from typing import Any, Callable, TypedDict
 
 import httpx
 
@@ -139,6 +143,63 @@ class WorkOrderClient:
 
         if not self.settings.username or not self.settings.password:
             raise ApiError("Missing WORKORDER_USERNAME or WORKORDER_PASSWORD.")
+
+    def prefetch_entities(
+        self,
+        *,
+        contacts: Iterable[str] | None = None,
+        companies: Iterable[str] | None = None,
+        supports: Iterable[str] | None = None,
+        groups: Iterable[str] | None = None,
+        templates: Iterable[str] | None = None,
+        max_workers: int = 8,
+        semaphore: "threading.Semaphore | None" = None,
+        progress_callback: Callable[[str, str], None] | None = None,
+    ) -> None:
+        """批量预取实体详情，填入缓存，后续 fetch_*_detail 直接命中缓存。
+
+        使用线程池并发请求，受 semaphore 控制 QPS。
+        progress_callback(entity_type, entity_id) 在每次请求完成后回调。
+        """
+
+        tasks: list[tuple[str, str]] = []
+        for source, entity_type in (
+            (contacts, "contact"),
+            (companies, "company"),
+            (supports, "support"),
+            (groups, "group"),
+            (templates, "template"),
+        ):
+            if source:
+                for eid in source:
+                    key = f"{entity_type}:{eid}"
+                    if key not in self._cache:
+                        tasks.append((entity_type, eid))
+
+        if not tasks:
+            return
+
+        def _fetch_one(item: tuple[str, str]) -> None:
+            if semaphore:
+                semaphore.acquire()
+            try:
+                entity_type, entity_id = item
+                if entity_type == "contact":
+                    self.fetch_contact_detail(entity_id)
+                elif entity_type == "company":
+                    self.fetch_company_detail(entity_id)
+                elif entity_type == "support":
+                    self.fetch_support_detail(entity_id)
+                elif entity_type == "group":
+                    self.fetch_support_group_detail(entity_id)
+                elif entity_type == "template":
+                    self.fetch_ticket_template_detail(entity_id)
+            finally:
+                if progress_callback:
+                    progress_callback(*item)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            list(pool.map(_fetch_one, tasks))
 
     def probe_paths(self, paths: list[str]) -> list[EndpointResult]:
         """按配置的 GET/POST 方法探测候选接口路径是否可访问。"""
@@ -613,7 +674,36 @@ def _json_or_empty(response: httpx.Response) -> Any:
     try:
         return response.json()
     except ValueError:
+        repaired = _repair_invalid_json_escapes(response.text)
+        if repaired != response.text:
+            try:
+                return json.loads(repaired)
+            except ValueError:
+                pass
         return {}
+
+
+def _repair_invalid_json_escapes(text: str) -> str:
+    """Escape bare backslashes in API strings without touching valid JSON escapes."""
+
+    valid_escapes = set('"\\/bfnrtu')
+    output: list[str] = []
+    index = 0
+    while index < len(text):
+        if text[index] != "\\":
+            output.append(text[index])
+            index += 1
+            continue
+
+        start = index
+        while index < len(text) and text[index] == "\\":
+            index += 1
+        count = index - start
+        next_char = text[index] if index < len(text) else ""
+        if next_char not in valid_escapes and count % 2 == 1:
+            count += 1
+        output.append("\\" * count)
+    return "".join(output)
 
 
 def _copy_detail(value: dict[str, Any] | None) -> dict[str, Any] | None:

@@ -160,6 +160,22 @@ def _replace_contact(row: dict[str, Any], client: WorkOrderClient) -> None:
         row["cust_user_name"] = contact_id
         return
     row["cust_user_name"] = _first_nonempty(contact.get("name"), contact_id)
+    # 通过联系人获取公司信息
+    _replace_company(row, contact, client)
+
+
+def _replace_company(row: dict[str, Any], contact: dict[str, Any], client: WorkOrderClient) -> None:
+    """通过联系人详情中的 companyId 补充公司 ID 和公司名称。"""
+
+    company_id = str(contact.get("companyId") or "").strip()
+    if not company_id or company_id == "0":
+        return
+    row["company_id"] = company_id
+    company = client.fetch_company_detail(company_id)
+    if not company:
+        row["company_name"] = company_id
+        return
+    row["company_name"] = _first_nonempty(company.get("companyName"), company_id)
 
 
 def _replace_support(row: dict[str, Any], key: str, client: WorkOrderClient) -> None:
@@ -325,8 +341,9 @@ def _first_nonempty(*values: Any) -> Any:
 ANALYTIC_FIELD_KEYWORDS: dict[str, list[str]] = {
     "province": ["省", "省份"],
     "city": ["市", "城市"],
-    "district": ["区", "县", "地区"],
-    "region_text": ["地区", "区域"],
+    "region_text": ["地区", "区域", "行政区划", "区划名称"],
+    "district": ["区", "县", "区县"],
+    "ticket_category": ["工单类别"],
     "product_line": ["产品线", "产品"],
     "module_name": ["模块"],
     "problem_type": ["问题类型", "问题分类"],
@@ -336,6 +353,9 @@ ANALYTIC_FIELD_KEYWORDS: dict[str, list[str]] = {
     "current_node_name": ["节点"],
     "current_node_status": ["状态"],
 }
+
+MUNICIPALITIES = {"北京市", "天津市", "上海市", "重庆市"}
+PROVINCE_SUFFIXES = ("省", "自治区", "特别行政区")
 
 
 def _clean_analytic_value(value: str) -> str:
@@ -352,6 +372,36 @@ def _clean_analytic_value(value: str) -> str:
     # 去掉括号内的编码
     text = re.sub(r"[（(]\d+[）)]\s*", "", text)
     return text.strip()
+
+
+def _set_if_blank(row: dict[str, Any], key: str, value: str | None) -> None:
+    if value and not row.get(key):
+        row[key] = value
+
+
+def _analytic_value_to_text(value: Any) -> str:
+    if isinstance(value, (dict, list)):
+        if value in ({}, []):
+            return ""
+        value = json.dumps(value, ensure_ascii=False)
+    if value is None:
+        return ""
+    text = _clean_analytic_value(str(value))
+    return "" if text in {"[]", "{}"} else text
+
+
+def _apply_region_value(row: dict[str, Any], value: str) -> None:
+    """Put province-level region values into province, not district."""
+
+    if not value:
+        return
+    _set_if_blank(row, "region_text", value)
+    if value in MUNICIPALITIES or value.endswith(PROVINCE_SUFFIXES):
+        _set_if_blank(row, "province", value)
+    elif value.endswith("市"):
+        _set_if_blank(row, "city", value)
+    elif value.endswith(("区", "县", "旗")):
+        _set_if_blank(row, "district", value)
 
 
 def _extract_analytic_dimensions(row: dict[str, Any]) -> None:
@@ -372,12 +422,22 @@ def _extract_analytic_dimensions(row: dict[str, Any]) -> None:
             if analytic_key in row and row[analytic_key]:
                 continue
             if any(keyword in field_name for keyword in keywords):
-                if isinstance(field_value, (dict, list)):
-                    row[analytic_key] = _clean_analytic_value(
-                        json.dumps(field_value, ensure_ascii=False),
-                    )
-                elif field_value is not None and str(field_value).strip():
-                    row[analytic_key] = _clean_analytic_value(str(field_value))
+                text = _analytic_value_to_text(field_value)
+                if not text:
+                    break
+                if analytic_key == "region_text":
+                    _apply_region_value(row, text)
+                elif analytic_key == "province":
+                    _set_if_blank(row, "province", text)
+                elif analytic_key == "city":
+                    _set_if_blank(row, "city", text)
+                elif analytic_key == "district":
+                    if text in MUNICIPALITIES or text.endswith(PROVINCE_SUFFIXES):
+                        _set_if_blank(row, "province", text)
+                    else:
+                        _set_if_blank(row, "district", text)
+                else:
+                    row[analytic_key] = text
                 break
 
     # current_node_started_at 来自 nodeFieldIntoTime（已在 _replace_unix_timestamp 中转为可读字符串）

@@ -1,0 +1,168 @@
+{
+  "calendar_code": "CN-2026",
+  "source": "国务院办公厅关于2026年部分节假日安排的通知",
+  "source_url": "https://www.gov.cn/gongbao/2025/issue_12406/202511/content_7048922.html",
+  "rule": "Default Monday-Friday are workdays. days overrides holidays and make-up workdays.",
+  "work_sessions": [
+    "09:00-11:50",
+    "13:40-18:00"
+  ],
+  "days": {
+    "2026-01-01": {
+      "is_workday": false,
+      "name": "元旦"
+    },
+    "2026-01-02": {
+      "is_workday": false,
+      "name": "元旦"
+    },
+    "2026-01-03": {
+      "is_workday": false,
+      "name": "元旦"
+    },
+    "2026-01-04": {
+      "is_workday": true,
+      "name": "元旦调休上班"
+    },
+    "2026-02-14": {
+      "is_workday": true,
+      "name": "春节调休上班"
+    },
+    "2026-02-15": {
+      "is_workday": false,
+      "name": "春节"
+    },
+    "2026-02-16": {
+      "is_workday": false,
+      "name": "春节"
+    },
+    "2026-02-17": {
+      "is_workday": false,
+      "name": "春节"
+    },
+    "2026-02-18": {
+      "is_workday": false,
+      "name": "春节"
+    },
+    "2026-02-19": {
+      "is_workday": false,
+      "name": "春节"
+    },
+    "2026-02-20": {
+      "is_workday": false,
+      "name": "春节"
+    },
+    "2026-02-21": {
+      "is_workday": false,
+      "name": "春节"
+    },
+    "2026-02-22": {
+      "is_workday": false,
+      "name": "春节"
+    },
+    "2026-02-23": {
+      "is_workday": false,
+      "name": "春节"
+    },
+    "2026-02-28": {
+      "is_workday": true,
+      "name": "春节调休上班"
+    },
+    "2026-04-04": {
+      "is_workday": false,
+      "name": "清明节"
+    },
+    "2026-04-05": {
+      "is_workday": false,
+      "name": "清明节"
+    },
+    "2026-04-06": {
+      "is_workday": false,
+      "name": "清明节"
+    },
+    "2026-05-01": {
+      "is_workday": false,
+      "name": "劳动节"
+    },
+    "2026-05-02": {
+      "is_workday": false,
+      "name": "劳动节"
+    },
+    "2026-05-03": {
+      "is_workday": false,
+      "name": "劳动节"
+    },
+    "2026-05-04": {
+      "is_workday": false,
+      "name": "劳动节"
+    },
+    "2026-05-05": {
+      "is_workday": false,
+      "name": "劳动节"
+    },
+    "2026-05-09": {
+      "is_workday": true,
+      "name": "劳动节调休上班"
+    },
+    "2026-06-19": {
+      "is_workday": false,
+      "name": "端午节"
+    },
+    "2026-06-20": {
+      "is_workday": false,
+      "name": "端午节"
+    },
+    "2026-06-21": {
+      "is_workday": false,
+      "name": "端午节"
+    },
+    "2026-09-20": {
+      "is_workday": true,
+      "name": "国庆节调休上班"
+    },
+    "2026-09-25": {
+      "is_workday": false,
+      "name": "中秋节"
+    },
+    "2026-09-26": {
+      "is_workday": false,
+      "name": "中秋节"
+    },
+    "2026-09-27": {
+      "is_workday": false,
+      "name": "中秋节"
+    },
+    "2026-10-01": {
+      "is_workday": false,
+      "name": "国庆节"
+    },
+    "2026-10-02": {
+      "is_workday": false,
+      "name": "国庆节"
+    },
+    "2026-10-03": {
+      "is_workday": false,
+      "name": "国庆节"
+    },
+    "2026-10-04": {
+      "is_workday": false,
+      "name": "国庆节"
+    },
+    "2026-10-05": {
+      "is_workday": false,
+      "name": "国庆节"
+    },
+    "2026-10-06": {
+      "is_workday": false,
+      "name": "国庆节"
+    },
+    "2026-10-07": {
+      "is_workday": false,
+      "name": "国庆节"
+    },
+    "2026-10-10": {
+      "is_workday": true,
+      "name": "国庆节调休上班"
+    }
+  }
+}

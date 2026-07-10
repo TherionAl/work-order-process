@@ -209,6 +209,38 @@ def test_resolve_ticket_detail_values_does_not_mutate_original() -> None:
     assert detail["servicerUserId"] == "100"
 
 
+def test_resolve_ticket_detail_values_places_region_province_correctly() -> None:
+    detail = {
+        "ticketId": "1",
+        "custom_fields": [{"key": "field_region", "value": "\u6e56\u5317\u7701"}],
+    }
+    client = _make_mock_client()
+    field_resolver = TicketFieldResolver(
+        [{"key": "field_region", "name": "\u5730\u533a", "custom_field_options": []}]
+    )
+
+    result = resolve_ticket_detail_values(detail, client, field_resolver)
+
+    assert result["province"] == "\u6e56\u5317\u7701"
+    assert result["region_text"] == "\u6e56\u5317\u7701"
+    assert "district" not in result
+
+
+def test_resolve_ticket_detail_values_extracts_ticket_category() -> None:
+    detail = {
+        "ticketId": "1",
+        "custom_fields": [{"key": "field_category", "value": "\u5b50\u5355"}],
+    }
+    client = _make_mock_client()
+    field_resolver = TicketFieldResolver(
+        [{"key": "field_category", "name": "\u5de5\u5355\u7c7b\u522b", "custom_field_options": []}]
+    )
+
+    result = resolve_ticket_detail_values(detail, client, field_resolver)
+
+    assert result["ticket_category"] == "\u5b50\u5355"
+
+
 def test_field_resolver_option_value_handles_list() -> None:
     """验证 option_value 能处理列表输入。"""
     resolver = _make_field_resolver()

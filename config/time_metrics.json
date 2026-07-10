@@ -1,0 +1,12 @@
+{
+  "metrics": [
+    {
+      "code": "example_node_duration",
+      "name": "示例节点工作时长",
+      "start_field": "field_249",
+      "end_field": "field_331",
+      "unit": "minutes",
+      "enabled": true
+    }
+  ]
+}

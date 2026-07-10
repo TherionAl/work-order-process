@@ -47,6 +47,12 @@ from .monthly_export import (
     export_year_monthly_tickets_and_samples,
 )
 from .personnel_import import import_personnel_xls_to_mysql
+from .time_metrics import (
+    DEFAULT_CALENDAR_PATH,
+    DEFAULT_METRICS_CONFIG,
+    export_month_time_metrics,
+    export_ticket_time_metrics,
+)
 
 
 console = Console()
@@ -65,6 +71,7 @@ def main() -> None:
             "mysql-import-customers", "mysql-import-contacts",
             "mysql-import-personnel",
             "mysql-add-partitions", "mysql-sync-log",
+            "metric-month", "metric-ticket",
             "probe", "dictionary",
         ],
         nargs="?",
@@ -87,6 +94,10 @@ def main() -> None:
     parser.add_argument("--detail-workers", type=int, default=4, help="样本详情并发获取线程数，默认 4。")
     parser.add_argument("--limit-per-month", type=int, default=None, help="调试用：限制每个月最多获取多少条列表记录。")
     parser.add_argument("--overwrite", action="store_true", help="覆盖已有月度输出文件。")
+    parser.add_argument("--metric-code", default=None, help="Only calculate one configured time metric.")
+    parser.add_argument("--metrics-config", default=str(DEFAULT_METRICS_CONFIG), help="Time metric config JSON path.")
+    parser.add_argument("--calendar-path", default=str(DEFAULT_CALENDAR_PATH), help="Work calendar JSON path.")
+    parser.add_argument("--output", default=None, help="Output JSON path.")
     parser.add_argument(
         "--personnel-file",
         default=str(PROJECT_ROOT / "人员信息名单20260708.xls"),
@@ -166,6 +177,7 @@ def main() -> None:
         report = import_personnel_xls_to_mysql(settings.mysql, Path(args.personnel_file))
         _print_personnel_import_report(report)
         return
+
     if args.command == "mysql-add-partitions":
         months_list = generate_months_ahead(args.months_ahead)
         created = add_future_partitions(settings.mysql, months_list)
@@ -173,6 +185,38 @@ def main() -> None:
             console.print(f"[green]新建分区: {', '.join(created)}[/green]")
         else:
             console.print("[dim]所有月份分区均已存在，无需新建。[/dim]")
+        return
+
+    if args.command == "metric-month":
+        if args.month is None:
+            raise ApiError("metric-month requires --month.")
+        report = export_month_time_metrics(
+            settings.mysql,
+            year=args.year,
+            month=args.month,
+            output_dir=settings.output_dir,
+            metrics_config_path=Path(args.metrics_config),
+            calendar_path=Path(args.calendar_path),
+            metric_code=args.metric_code,
+            limit=args.limit_per_month,
+            output_path=Path(args.output) if args.output else None,
+        )
+        _print_time_metric_report(report)
+        return
+
+    if args.command == "metric-ticket":
+        if not args.ticket_id:
+            raise ApiError("metric-ticket requires --ticket-id.")
+        report = export_ticket_time_metrics(
+            settings.mysql,
+            ticket_id=args.ticket_id,
+            output_dir=settings.output_dir,
+            metrics_config_path=Path(args.metrics_config),
+            calendar_path=Path(args.calendar_path),
+            metric_code=args.metric_code,
+            output_path=Path(args.output) if args.output else None,
+        )
+        _print_time_metric_report(report)
         return
 
     try:
@@ -192,9 +236,9 @@ def main() -> None:
                 report = import_month_tickets_to_mysql(
                     settings.mysql, dictionary, client,
                     year=args.year, month=args.month, per_page=args.per_page,
+                    limit_per_month=args.limit_per_month,
                     max_workers=args.max_workers, batch_size=args.batch_size,
                     api_rate_limit=args.api_rate_limit,
-                    output_dir=settings.output_dir,
                 )
                 _print_mysql_month_report(report)
                 return
@@ -206,6 +250,7 @@ def main() -> None:
                 report = import_month_tickets_serial(
                     settings.mysql, dictionary, client,
                     year=args.year, month=args.month, per_page=args.per_page,
+                    limit_per_month=args.limit_per_month,
                     output_dir=settings.output_dir,
                 )
                 _print_mysql_month_report(report)
@@ -217,6 +262,7 @@ def main() -> None:
                     year=args.year,
                     months=[args.month] if args.month is not None else None,
                     per_page=args.per_page,
+                    limit_per_month=args.limit_per_month,
                     max_workers=args.max_workers, batch_size=args.batch_size,
                     api_rate_limit=args.api_rate_limit,
                     output_dir=settings.output_dir,
@@ -355,6 +401,7 @@ def _print_personnel_import_report(report: dict[str, Any]) -> None:
     )
     console.print(table)
 
+
 def _get_log_limit() -> int:
     """返回 --log-limit 的值（延迟读取，避免全局 argparse 依赖）。"""
 
@@ -474,6 +521,22 @@ def _print_customer_contact_report(table_name: str, report: dict[str, Any]) -> N
 
     table = Table("Table", "Total", "Succeeded", "Failed", "Duration (s)")
     table.add_row(table_name, str(report["total"]), str(report["succeeded"]), str(report["failed"]), str(report.get("duration_seconds", "")))
+    console.print(table)
+
+
+def _print_time_metric_report(report: dict[str, Any]) -> None:
+    """输出时间指标 JSON 导出摘要。"""
+
+    table = Table("Metric", "Value")
+    if report.get("month"):
+        table.add_row("Month", str(report["month"]))
+    if report.get("ticket_id"):
+        table.add_row("Ticket ID", str(report["ticket_id"]))
+    table.add_row("Tickets", str(report.get("ticket_count", 1)))
+    table.add_row("Metric count", str(report["metric_count"]))
+    table.add_row("Rows", str(report["result_count"]))
+    table.add_row("Status counts", str(report["summary"]["status_counts"]))
+    table.add_row("Output", str(report["output_path"]))
     console.print(table)
 
 
