@@ -1,4 +1,10 @@
-from work_order_process.structured_entities import build_contact_row, build_customer_row
+from work_order_process.structured_entities import (
+    CONTACT_HASH_FIELDS,
+    CUSTOMER_HASH_FIELDS,
+    build_contact_row,
+    build_customer_row,
+    entity_row_hash,
+)
 
 
 def test_build_customer_row_normalizes_customer_and_company_fields() -> None:
@@ -53,3 +59,16 @@ def test_build_contact_row_normalizes_contact_and_company_contact_fields() -> No
     assert row["position_name"] == "财务"
     assert row["source_flags"] == "contact"
     assert row["source_updated_at"].year == 2025
+
+
+def test_customer_hash_is_stable_and_ignores_sync_metadata() -> None:
+    row = build_customer_row({"uId": "C1", "companyName": "Example"}, "companies")
+    with_sync_metadata = {**row, "last_sync_at": "later", "sync_batch_id": "batch-2"}
+
+    assert entity_row_hash(row, CUSTOMER_HASH_FIELDS) == entity_row_hash(with_sync_metadata, CUSTOMER_HASH_FIELDS)
+
+
+def test_contact_hash_changes_when_business_contact_field_changes() -> None:
+    row = build_contact_row({"cId": "U1", "realName": "Alice", "mobile": "13800000000"}, "users")
+
+    assert entity_row_hash(row, CONTACT_HASH_FIELDS) != entity_row_hash({**row, "phone": "13900000000"}, CONTACT_HASH_FIELDS)

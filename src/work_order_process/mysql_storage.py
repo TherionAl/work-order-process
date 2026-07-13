@@ -313,6 +313,185 @@ COMMENT='联系人表'
 """
 
 
+CUSTOMERS_ALTER_STATEMENTS = (
+    "ALTER TABLE customers ADD COLUMN `contact_name` VARCHAR(255) NULL COMMENT '主联系人姓名'",
+    "ALTER TABLE customers ADD COLUMN `phone` VARCHAR(100) NULL COMMENT '主联系人电话'",
+    "ALTER TABLE customers ADD COLUMN `email` VARCHAR(255) NULL COMMENT '主联系人邮箱'",
+    "ALTER TABLE customers ADD COLUMN `row_hash` CHAR(64) NULL COMMENT '业务字段哈希'",
+    "ALTER TABLE customers ADD COLUMN `sync_batch_id` CHAR(36) NULL COMMENT '最近同步批次'",
+)
+
+CONTACTS_ALTER_STATEMENTS = (
+    "ALTER TABLE contacts ADD COLUMN `fixed_phone` VARCHAR(100) NULL COMMENT '固定电话'",
+    "ALTER TABLE contacts ADD COLUMN `row_hash` CHAR(64) NULL COMMENT '业务字段哈希'",
+    "ALTER TABLE contacts ADD COLUMN `sync_batch_id` CHAR(36) NULL COMMENT '最近同步批次'",
+)
+
+CUSTOMER_HISTORY_DDL = """
+CREATE TABLE IF NOT EXISTS customer_history (
+  customer_id VARCHAR(255) NOT NULL,
+  version_no INT NOT NULL,
+  customer_name VARCHAR(500) NULL,
+  customer_type VARCHAR(100) NULL,
+  province VARCHAR(50) NULL,
+  city VARCHAR(50) NULL,
+  district VARCHAR(50) NULL,
+  address VARCHAR(500) NULL,
+  contact_name VARCHAR(255) NULL,
+  phone VARCHAR(100) NULL,
+  email VARCHAR(255) NULL,
+  source_flags VARCHAR(100) NULL,
+  source_updated_at DATETIME NULL,
+  row_hash CHAR(64) NOT NULL,
+  sync_batch_id CHAR(36) NOT NULL,
+  effective_from DATETIME NOT NULL,
+  effective_to DATETIME NULL,
+  is_current TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (customer_id, version_no),
+  KEY idx_customer_history_active (customer_id, is_current, effective_from),
+  KEY idx_customer_history_period (effective_from, effective_to)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='客户历史快照表'
+"""
+
+CONTACT_HISTORY_DDL = """
+CREATE TABLE IF NOT EXISTS contact_history (
+  contact_id VARCHAR(255) NOT NULL,
+  version_no INT NOT NULL,
+  contact_name VARCHAR(255) NULL,
+  phone VARCHAR(100) NULL,
+  fixed_phone VARCHAR(100) NULL,
+  email VARCHAR(255) NULL,
+  qq VARCHAR(50) NULL,
+  wechat VARCHAR(100) NULL,
+  customer_id VARCHAR(255) NULL,
+  customer_name VARCHAR(500) NULL,
+  department_name VARCHAR(255) NULL,
+  position_name VARCHAR(255) NULL,
+  source_flags VARCHAR(100) NULL,
+  source_updated_at DATETIME NULL,
+  row_hash CHAR(64) NOT NULL,
+  sync_batch_id CHAR(36) NOT NULL,
+  effective_from DATETIME NOT NULL,
+  effective_to DATETIME NULL,
+  is_current TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (contact_id, version_no),
+  KEY idx_contact_history_active (contact_id, is_current, effective_from),
+  KEY idx_contact_history_period (effective_from, effective_to)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='联系人历史快照表'
+"""
+
+CUSTOMER_CONTACT_RELATION_HISTORY_DDL = """
+CREATE TABLE IF NOT EXISTS customer_contact_relation_history (
+  contact_id VARCHAR(255) NOT NULL,
+  version_no INT NOT NULL,
+  customer_id VARCHAR(255) NULL,
+  customer_name VARCHAR(500) NULL,
+  sync_batch_id CHAR(36) NOT NULL,
+  effective_from DATETIME NOT NULL,
+  effective_to DATETIME NULL,
+  is_current TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (contact_id, version_no),
+  KEY idx_relation_customer_active (customer_id, is_current),
+  KEY idx_relation_period (effective_from, effective_to)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='联系人客户归属历史表'
+"""
+
+API_SYNC_BATCH_DDL = """
+CREATE TABLE IF NOT EXISTS api_sync_batch (
+  sync_batch_id CHAR(36) NOT NULL,
+  entity_type VARCHAR(20) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  fetched_count INT NOT NULL DEFAULT 0,
+  raw_saved_count INT NOT NULL DEFAULT 0,
+  inserted_count INT NOT NULL DEFAULT 0,
+  changed_count INT NOT NULL DEFAULT 0,
+  unchanged_count INT NOT NULL DEFAULT 0,
+  failed_count INT NOT NULL DEFAULT 0,
+  error_message TEXT NULL,
+  started_at DATETIME NOT NULL,
+  finished_at DATETIME NULL,
+  PRIMARY KEY (sync_batch_id),
+  KEY idx_api_sync_batch_entity_status (entity_type, status, started_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='客户联系人API同步批次'
+"""
+
+API_RAW_RECORD_DDL = """
+CREATE TABLE IF NOT EXISTS api_raw_record (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  sync_batch_id CHAR(36) NOT NULL,
+  entity_type VARCHAR(20) NOT NULL,
+  source_name VARCHAR(100) NOT NULL,
+  source_record_id VARCHAR(255) NOT NULL,
+  payload_json JSON NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_api_raw_record (sync_batch_id, entity_type, source_name, source_record_id),
+  KEY idx_api_raw_entity (entity_type, source_record_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='客户联系人API原始留档'
+"""
+
+CUSTOMER_SERVICE_VIEW_SQL = """
+CREATE OR REPLACE VIEW v_customer_service_overview AS
+SELECT
+  h.customer_id,
+  h.customer_name,
+  h.customer_type,
+  h.province,
+  h.city,
+  h.effective_from,
+  h.effective_to,
+  COUNT(t.ticket_id) AS ticket_count,
+  SUM(t.ticket_status IN ('4', '5', '6')) AS resolved_ticket_count,
+  AVG(CASE WHEN t.solve_dt IS NOT NULL THEN TIMESTAMPDIFF(SECOND, t.create_dt, t.solve_dt) END) AS avg_resolution_seconds
+FROM customer_history h
+LEFT JOIN ticket_detail_main t
+  ON t.company_id = h.customer_id
+  AND t.create_dt >= h.effective_from
+  AND (h.effective_to IS NULL OR t.create_dt < h.effective_to)
+GROUP BY h.customer_id, h.version_no, h.customer_name, h.customer_type, h.province, h.city, h.effective_from, h.effective_to
+"""
+
+CONTACT_SERVICE_VIEW_SQL = """
+CREATE OR REPLACE VIEW v_contact_service_overview AS
+SELECT
+  h.contact_id,
+  h.contact_name,
+  h.customer_id,
+  h.customer_name,
+  h.department_name,
+  h.position_name,
+  h.effective_from,
+  h.effective_to,
+  COUNT(t.ticket_id) AS ticket_count,
+  SUM(t.ticket_status IN ('4', '5', '6')) AS resolved_ticket_count
+FROM contact_history h
+LEFT JOIN ticket_detail_main t
+  ON t.cust_user_id = h.contact_id
+  AND t.create_dt >= h.effective_from
+  AND (h.effective_to IS NULL OR t.create_dt < h.effective_to)
+GROUP BY h.contact_id, h.version_no, h.contact_name, h.customer_id, h.customer_name, h.department_name, h.position_name, h.effective_from, h.effective_to
+"""
+
+CUSTOMER_DATA_QUALITY_VIEW_SQL = """
+CREATE OR REPLACE VIEW v_customer_data_quality AS
+SELECT
+  (SELECT COUNT(*) FROM customers) AS customer_count,
+  (SELECT COUNT(*) FROM contacts) AS contact_count,
+  (SELECT COUNT(*) FROM contacts WHERE customer_id IS NOT NULL AND customer_id <> '') AS linked_contact_count,
+  (SELECT COUNT(*) FROM contacts WHERE phone IS NOT NULL AND phone <> '') AS phone_covered_contact_count,
+  (SELECT COUNT(*) FROM contacts WHERE email IS NOT NULL AND email <> '') AS email_covered_contact_count,
+  (SELECT COUNT(*) FROM ticket_detail_main WHERE company_id IS NULL OR company_id = '') AS unlinked_ticket_count
+"""
+
+
 SYNC_TASK_LOG_DDL = """
 CREATE TABLE IF NOT EXISTS sync_task_log (
   id BIGINT NOT NULL AUTO_INCREMENT COMMENT '自增主键',
@@ -364,6 +543,52 @@ def ensure_mysql_schema(config: MySQLConfig) -> None:
             cursor.execute(CONTACTS_DDL)
             cursor.execute(SYNC_TASK_LOG_DDL)
             _ensure_ticket_detail_main_columns(cursor, config.database)
+            _ensure_customer_contact_analytics_schema(cursor, config.database)
+
+
+def _ensure_customer_contact_analytics_schema(cursor: Any, database: str) -> None:
+    """Create append-only customer/contact analytics tables and missing current columns."""
+
+    cursor.execute(CUSTOMER_HISTORY_DDL)
+    cursor.execute(CONTACT_HISTORY_DDL)
+    cursor.execute(CUSTOMER_CONTACT_RELATION_HISTORY_DDL)
+    cursor.execute(API_SYNC_BATCH_DDL)
+    cursor.execute(API_RAW_RECORD_DDL)
+    _add_missing_columns(cursor, database, "customers", CUSTOMERS_ALTER_STATEMENTS)
+    _add_missing_columns(cursor, database, "contacts", CONTACTS_ALTER_STATEMENTS)
+
+
+def create_customer_contact_analysis_views(config: MySQLConfig) -> None:
+    """Create the query-only customer/contact analytics views."""
+
+    ensure_mysql_schema(config)
+    pymysql = _pymysql()
+    with pymysql.connect(
+        host=config.host,
+        port=config.port,
+        user=config.user,
+        password=config.password,
+        database=config.database,
+        charset="utf8mb4",
+        autocommit=True,
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(CUSTOMER_SERVICE_VIEW_SQL)
+            cursor.execute(CONTACT_SERVICE_VIEW_SQL)
+            cursor.execute(CUSTOMER_DATA_QUALITY_VIEW_SQL)
+
+
+def _add_missing_columns(cursor: Any, database: str, table_name: str, statements: Iterable[str]) -> None:
+    cursor.execute(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s",
+        (database, table_name),
+    )
+    existing = {str(row[0]) for row in cursor.fetchall()}
+    for statement in statements:
+        match = re.search(r"ADD COLUMN `([^`]+)`", statement)
+        if match and match.group(1) not in existing:
+            cursor.execute(statement)
+            existing.add(match.group(1))
 
 
 def _ensure_ticket_detail_main_columns(cursor: Any, database: str) -> None:
@@ -1134,9 +1359,29 @@ def import_year_tickets_to_mysql(
 def import_customers_to_mysql(
     config: MySQLConfig,
     client: WorkOrderClient,
-    sources: Iterable[str] = ("companies", "customers"),
+    sources: Iterable[str] = ("companies",),
+    require_nonempty: bool = True,
+    max_records: int | None = None,
 ) -> dict[str, Any]:
     """拉取客户/公司列表，upsert 到 customers 表。"""
+
+    from .customer_contact_sync import sync_customer_entities
+
+    report = sync_customer_entities(
+        config, client, sources=sources, require_nonempty=require_nonempty, max_records=max_records,
+    )
+    return {
+        "total": report.fetched,
+        "succeeded": report.inserted + report.changed + report.unchanged,
+        "failed": report.failed,
+        "duration_seconds": 0,
+        "batch_id": report.batch_id,
+        "status": report.status,
+        "inserted": report.inserted,
+        "changed": report.changed,
+        "unchanged": report.unchanged,
+        "raw_saved": report.raw_saved,
+    }
 
     ensure_mysql_schema(config)
     started_at = datetime.now()
@@ -1215,9 +1460,29 @@ def import_customers_to_mysql(
 def import_contacts_to_mysql(
     config: MySQLConfig,
     client: WorkOrderClient,
-    sources: Iterable[str] = ("contacts", "company_contacts"),
+    sources: Iterable[str] = ("contacts",),
+    require_nonempty: bool = True,
+    max_records: int | None = None,
 ) -> dict[str, Any]:
     """拉取联系人列表，upsert 到 contacts 表。"""
+
+    from .customer_contact_sync import sync_contact_entities
+
+    report = sync_contact_entities(
+        config, client, sources=sources, require_nonempty=require_nonempty, max_records=max_records,
+    )
+    return {
+        "total": report.fetched,
+        "succeeded": report.inserted + report.changed + report.unchanged,
+        "failed": report.failed,
+        "duration_seconds": 0,
+        "batch_id": report.batch_id,
+        "status": report.status,
+        "inserted": report.inserted,
+        "changed": report.changed,
+        "unchanged": report.unchanged,
+        "raw_saved": report.raw_saved,
+    }
 
     ensure_mysql_schema(config)
     started_at = datetime.now()

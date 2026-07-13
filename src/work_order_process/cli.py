@@ -30,6 +30,7 @@ from .config import ConfigError, PROJECT_ROOT, load_settings
 from .dictionary import DataDictionary
 from .mysql_storage import (
     add_future_partitions,
+    create_customer_contact_analysis_views,
     drop_mysql_tables,
     ensure_mysql_schema,
     generate_months_ahead,
@@ -67,9 +68,9 @@ def main() -> None:
         "command",
         choices=[
             "run", "monthly-tickets", "template-samples",
-            "mysql-init", "mysql-drop-tables",
+            "mysql-init", "mysql-drop-tables", "mysql-create-analysis-views",
             "mysql-import-ticket", "mysql-import-month", "mysql-import-month-v1", "mysql-import-year",
-            "mysql-import-customers", "mysql-import-contacts",
+            "mysql-import-customers", "mysql-import-contacts", "mysql-probe-customers", "mysql-probe-contacts",
             "mysql-import-personnel",
             "mysql-add-partitions", "mysql-sync-log",
             "import-erp",
@@ -80,10 +81,10 @@ def main() -> None:
         default="run",
         help=(
             "run: 导出月度工单合集和样本详情；monthly-tickets: 只导出月度工单合集；template-samples: 按模板抽样；"
-            "mysql-init: 初始化 5 表结构；mysql-drop-tables: 删除全部表；"
+            "mysql-init: 初始化表结构；mysql-create-analysis-views: 创建分析视图；mysql-drop-tables: 删除全部表；"
             "mysql-import-ticket: 单条入库；mysql-import-month: 单月入库；"
             "mysql-import-year: 全年入库；mysql-import-customers: 导入客户；"
-            "mysql-import-contacts: 导入联系人；mysql-add-partitions: 增加分区；"
+            "mysql-import-contacts: 导入联系人；mysql-probe-customers/mysql-probe-contacts: 只读探测；mysql-add-partitions: 增加分区；"
             "mysql-sync-log: 查看同步日志；import-erp: ERP新旧数据Excel入库；"
             "probe: 探测接口；dictionary: 导出数据字典。"
         ),
@@ -109,13 +110,13 @@ def main() -> None:
     parser.add_argument(
         "--customers-source",
         choices=["companies", "customers", "both"],
-        default="both",
+        default="companies",
         help="客户导入的数据源，默认 both。",
     )
     parser.add_argument(
         "--contacts-source",
         choices=["contacts", "company_contacts", "both"],
-        default="both",
+        default="contacts",
         help="联系人导入的数据源，默认 both。",
     )
     parser.add_argument(
@@ -129,6 +130,17 @@ def main() -> None:
         type=int,
         default=20,
         help="mysql-sync-log: 显示最近多少条日志，默认 20。",
+    )
+    parser.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="允许客户或联系人接口返回 0 条时仍将同步批次标记为成功。默认禁止。",
+    )
+    parser.add_argument(
+        "--max-records",
+        type=int,
+        default=None,
+        help="客户/联系人同步最多写入的记录数；用于受控验证，默认不限制。",
     )
     parser.add_argument(
         "--max-workers",
@@ -174,6 +186,11 @@ def main() -> None:
             f"地址: {settings.mysql.host}:{settings.mysql.port}/{settings.mysql.database}\n"
             f"已创建 5 张表，{month_count} 个月分区 + pmax"
         )
+        return
+
+    if args.command == "mysql-create-analysis-views":
+        create_customer_contact_analysis_views(settings.mysql)
+        console.print("[green]客户/联系人分析视图已创建。[/green]")
         return
 
     if args.command == "mysql-drop-tables":
@@ -287,14 +304,28 @@ def main() -> None:
 
             if args.command == "mysql-import-customers":
                 sources = _resolve_sources(args.customers_source, ["companies", "customers"])
-                report = import_customers_to_mysql(settings.mysql, client, sources=sources)
+                report = import_customers_to_mysql(
+                    settings.mysql, client, sources=sources, require_nonempty=not args.allow_empty,
+                    max_records=args.max_records,
+                )
                 _print_customer_contact_report("customers", report)
                 return
 
             if args.command == "mysql-import-contacts":
                 sources = _resolve_sources(args.contacts_source, ["contacts", "company_contacts"])
-                report = import_contacts_to_mysql(settings.mysql, client, sources=sources)
+                report = import_contacts_to_mysql(
+                    settings.mysql, client, sources=sources, require_nonempty=not args.allow_empty,
+                    max_records=args.max_records,
+                )
                 _print_customer_contact_report("contacts", report)
+                return
+
+            if args.command == "mysql-probe-customers":
+                _print_entity_probe(client.probe_entity_paths(settings.endpoint.customer_paths, "customer", args.sample_size))
+                return
+
+            if args.command == "mysql-probe-contacts":
+                _print_entity_probe(client.probe_entity_paths(settings.endpoint.contact_paths, "contact", args.sample_size))
                 return
 
             if args.command == "mysql-sync-log":
@@ -446,6 +477,21 @@ def _probe(client: WorkOrderClient) -> None:
         table.add_row(result.path, "yes" if result.ok else "no", result.detail[:100])
     for result in client.probe_paths(client.settings.endpoint.ticket_paths[:1]):
         table.add_row(result.path, "yes" if result.ok else "no", result.detail[:100])
+    console.print(table)
+
+
+def _print_entity_probe(reports: list[dict[str, Any]]) -> None:
+    """Print endpoint counts and keys only; never print personal-data values."""
+
+    table = Table("Path", "Entity", "Status", "Records", "Field Keys")
+    for report in reports:
+        table.add_row(
+            str(report["path"]),
+            str(report["entity_type"]),
+            str(report["status"]),
+            str(report.get("count", "-")),
+            ", ".join(report.get("sample_keys", [])) or "-",
+        )
     console.print(table)
 
 

@@ -22,7 +22,7 @@ import random
 import re
 import threading
 import time
-from typing import Any, Callable, TypedDict
+from typing import Any, Callable, Iterator, TypedDict
 
 import httpx
 
@@ -236,6 +236,40 @@ class WorkOrderClient:
                 errors.append(f"{path}: {exc}")
         raise ApiError("No configured endpoint returned data.\n" + "\n".join(errors[-8:]))
 
+    def probe_entity_paths(
+        self,
+        paths: list[str],
+        entity_type: str,
+        sample_size: int = 3,
+    ) -> list[dict[str, Any]]:
+        """Probe candidate entity endpoints without exposing record values."""
+
+        reports: list[dict[str, Any]] = []
+        for path in paths:
+            try:
+                response = self._first_successful_request(
+                    path,
+                    {"page": 1, "pageNo": 1, "pageNum": 1, "current": 1, "pageSize": sample_size, "limit": sample_size},
+                )
+                if not _looks_successful(response):
+                    raise ApiError(f"HTTP {response.status_code}: {response.text[:300]}")
+                body = _json_or_empty(response)
+                rows = _extract_items(body)
+                count = _declared_item_count(body, len(rows))
+            except ApiError as exc:
+                reports.append({"path": path, "entity_type": entity_type, "status": "error", "error": str(exc)})
+                continue
+            reports.append(
+                {
+                    "path": path,
+                    "entity_type": entity_type,
+                    "status": "ok" if rows else "empty",
+                    "count": count,
+                    "sample_keys": sorted({str(key) for row in rows[:sample_size] for key in row}),
+                }
+            )
+        return reports
+
     def fetch_customers(self) -> list[dict]:
         """获取客户/公司列表，保留接口原始字段。"""
 
@@ -255,6 +289,16 @@ class WorkOrderClient:
         """获取公司联系人列表；当前接口文档中公司联系人和联系人路径一致。"""
 
         return self.fetch_all(self.settings.endpoint.contact_paths)
+
+    def iter_companies(self) -> Iterator[list[dict]]:
+        """Yield company rows page by page for large imports."""
+
+        return self.iter_entity_pages(self.settings.endpoint.customer_paths, self.settings.page_size)
+
+    def iter_contacts(self) -> Iterator[list[dict]]:
+        """Yield contact rows page by page for large imports."""
+
+        return self.iter_entity_pages(self.settings.endpoint.contact_paths, self.settings.page_size)
 
     def fetch_contact_detail(self, contact_id: str) -> dict | None:
         """按联系人主键读取联系人详情，用于把 custUserId 替换为联系人姓名。"""
@@ -638,6 +682,48 @@ class WorkOrderClient:
                 break
         return items
 
+    def iter_entity_pages(self, paths: list[str], page_size: int) -> Iterator[list[dict]]:
+        """Yield the first non-empty configured entity endpoint one page at a time."""
+
+        errors: list[str] = []
+        for path in paths:
+            yielded = False
+            observed_page_size: int | None = None
+            try:
+                for page in range(1, self.settings.max_pages + 1):
+                    params = {
+                        "page": page,
+                        "pageNo": page,
+                        "pageNum": page,
+                        "current": page,
+                        "pageSize": page_size,
+                        "limit": page_size,
+                    }
+                    response = self._first_successful_request(path, params)
+                    if not _looks_successful(response):
+                        raise ApiError(f"HTTP {response.status_code}: {response.text[:300]}")
+                    body = _json_or_empty(response)
+                    page_items = _extract_items(body)
+                    if not page_items:
+                        break
+                    yielded = True
+                    observed_page_size = observed_page_size or len(page_items)
+                    yield page_items
+                    declared_count = _declared_item_count(body, 0)
+                    has_more = (
+                        page * observed_page_size < declared_count
+                        if declared_count and observed_page_size
+                        else _has_more(body, page, len(page_items))
+                    )
+                    if not has_more:
+                        return
+            except ApiError as exc:
+                errors.append(f"{path}: {exc}")
+                continue
+            if yielded:
+                return
+        raise ApiError("No configured endpoint returned data.\n" + "\n".join(errors[-8:]))
+
     def _first_successful_request(self, path: str, data: dict[str, Any]) -> httpx.Response:
         """同一路径按配置的方法依次尝试，返回第一个成功响应。"""
 
@@ -764,6 +850,22 @@ def _extract_items(body: Any) -> list[dict]:
         if isinstance(candidate, list):
             return [item for item in candidate if isinstance(item, dict)]
     return []
+
+
+def _declared_item_count(body: Any, fallback: int) -> int:
+    """Read a response total without fetching remaining pages."""
+
+    if not isinstance(body, dict):
+        return fallback
+    data = body.get("data") if isinstance(body.get("data"), dict) else body
+    for key in ("total", "count", "totalCount"):
+        try:
+            value = data.get(key)
+            if value not in (None, ""):
+                return int(value)
+        except (TypeError, ValueError):
+            continue
+    return fallback
 
 
 def _has_more(body: Any, page: int, item_count: int) -> bool:

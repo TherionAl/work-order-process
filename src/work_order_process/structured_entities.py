@@ -9,9 +9,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 
 CUSTOMER_COLUMNS = [
@@ -44,6 +45,9 @@ CONTACT_COLUMNS = [
     "source_flags",
     "source_updated_at",
 ]
+
+CUSTOMER_HASH_FIELDS = tuple(CUSTOMER_COLUMNS)
+CONTACT_HASH_FIELDS = tuple(CONTACT_COLUMNS)
 
 
 def build_customer_row(record: dict[str, Any], source_flag: str) -> dict[str, Any]:
@@ -91,6 +95,14 @@ def build_contact_row(record: dict[str, Any], source_flag: str) -> dict[str, Any
         "source_flags": source_flag,
         "source_updated_at": parse_datetime(first_value(record, "updateTime", "updateDT", "updated_at", "modifyTime")),
     }
+
+
+def entity_row_hash(row: Mapping[str, Any], fields: Sequence[str]) -> str:
+    """Return a stable business-field hash for change detection."""
+
+    payload = {field: row.get(field) for field in fields}
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def first_value(record: dict[str, Any], *keys: str) -> Any:
