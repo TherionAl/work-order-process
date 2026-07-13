@@ -20,7 +20,7 @@
 
    1.1 开发语言：python
 
-   1.2 项目创建地址：D:\Users\python_project\work_order_process_v1.1
+   1.2 项目创建地址：D:\Users\python_project\work_order_process
 
    1.3 开发环境及依赖包管理工具：uv
 

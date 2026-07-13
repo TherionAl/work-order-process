@@ -15,13 +15,13 @@
 ## 导入命令
 
 ```powershell
-uv run work_order_process_v1.1 mysql-import-personnel
+uv run work_order_process mysql-import-personnel
 ```
 
 指定其他文件：
 
 ```powershell
-uv run work_order_process_v1.1 mysql-import-personnel --personnel-file .\人员信息名单20260708.xls
+uv run work_order_process mysql-import-personnel --personnel-file .\人员信息名单20260708.xls
 ```
 
 ## 关联查询

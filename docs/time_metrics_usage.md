@@ -93,25 +93,25 @@ enabled      是否启用
 按月导出：
 
 ```powershell
-uv run work_order_process_v1.1 metric-month --year 2026 --month 6
+uv run work_order_process metric-month --year 2026 --month 6
 ```
 
 只导出某一个指标：
 
 ```powershell
-uv run work_order_process_v1.1 metric-month --year 2026 --month 6 --metric-code approval_duration
+uv run work_order_process metric-month --year 2026 --month 6 --metric-code approval_duration
 ```
 
 只导出前 100 条用于验证：
 
 ```powershell
-uv run work_order_process_v1.1 metric-month --year 2026 --month 6 --limit-per-month 100
+uv run work_order_process metric-month --year 2026 --month 6 --limit-per-month 100
 ```
 
 按单个工单导出：
 
 ```powershell
-uv run work_order_process_v1.1 metric-ticket --ticket-id 22256891
+uv run work_order_process metric-ticket --ticket-id 22256891
 ```
 
 默认输出目录：

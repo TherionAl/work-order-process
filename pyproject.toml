@@ -1,5 +1,5 @@
 [project]
-name = "work_order_process_v1.1"
+name = "work_order_process"
 version = "1.1.0"
 description = "Fetch, normalize, and import Bosssoft work-order data."
 readme = "README.md"
@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-"work_order_process_v1.1" = "work_order_process.cli:main"
+"work_order_process" = "work_order_process.cli:main"
 
 [build-system]
 requires = ["hatchling"]

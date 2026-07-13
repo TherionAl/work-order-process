@@ -353,7 +353,7 @@ wheels = [
 ]
 
 [[package]]
-name = "work-order-process-v1-1"
+name = "work-order-process"
 version = "1.1.0"
 source = { editable = "." }
 dependencies = [

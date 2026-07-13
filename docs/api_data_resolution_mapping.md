@@ -253,31 +253,31 @@ last_sync_at
 导出月度工单合集和每月样本详情：
 
 ```powershell
-uv run work_order_process_v1.1 run --year 2026
+uv run work_order_process run --year 2026
 ```
 
 只导出月度工单合集，不拉详情样本：
 
 ```powershell
-uv run work_order_process_v1.1 monthly-tickets --year 2026
+uv run work_order_process monthly-tickets --year 2026
 ```
 
 限制调试数据量：
 
 ```powershell
-uv run work_order_process_v1.1 run --year 2026 --limit-per-month 10 --overwrite
+uv run work_order_process run --year 2026 --limit-per-month 10 --overwrite
 ```
 
 控制样本详情并发：
 
 ```powershell
-uv run work_order_process_v1.1 run --year 2026 --detail-workers 4
+uv run work_order_process run --year 2026 --detail-workers 4
 ```
 
 ## 按模板抽样
 
 ```powershell
-uv run work_order_process_v1.1 template-samples --year 2026 --month 6 --sample-size 3 --seed 202606 --overwrite
+uv run work_order_process template-samples --year 2026 --month 6 --sample-size 3 --seed 202606 --overwrite
 ```
 
 流程：
@@ -297,38 +297,38 @@ GET /tickets/search.json?query=createDT:YYYY-MM ticketTemplateId:<模板ID>
 初始化：
 
 ```powershell
-uv run work_order_process_v1.1 mysql-init
+uv run work_order_process mysql-init
 ```
 
 单条工单：
 
 ```powershell
-uv run work_order_process_v1.1 mysql-import-ticket --ticket-id 22256891
+uv run work_order_process mysql-import-ticket --ticket-id 22256891
 ```
 
 单月：
 
 ```powershell
-uv run work_order_process_v1.1 mysql-import-month --year 2025 --month 1
+uv run work_order_process mysql-import-month --year 2025 --month 1
 ```
 
 全年：
 
 ```powershell
-uv run work_order_process_v1.1 mysql-import-year --year 2025
+uv run work_order_process mysql-import-year --year 2025
 ```
 
 客户和联系人：
 
 ```powershell
-uv run work_order_process_v1.1 mysql-import-customers
-uv run work_order_process_v1.1 mysql-import-contacts
+uv run work_order_process mysql-import-customers
+uv run work_order_process mysql-import-contacts
 ```
 
 同步日志：
 
 ```powershell
-uv run work_order_process_v1.1 mysql-sync-log --log-limit 20
+uv run work_order_process mysql-sync-log --log-limit 20
 ```
 
 ## 当前语义和旧根目录版差异

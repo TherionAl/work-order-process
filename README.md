@@ -1,4 +1,4 @@
-# work_order_process_v1.1：工单数据获取、解析与 MySQL 入库
+# work_order_process：工单数据获取、解析与 MySQL 入库
 
 本项目从“帮我吧”工单系统 API 获取工单数据，支持月度 JSON 导出、样本详情解析、数据字典中文化，以及面向 MySQL 数据湖的批量入库。
 
@@ -42,50 +42,50 @@ WORKORDER_MYSQL_DATABASE=work_order_datalake
 导出 2025 年月度工单合集和每月样本详情：
 
 ```powershell
-uv run work_order_process_v1.1 run
+uv run work_order_process run
 ```
 
 只跑指定月份：
 
 ```powershell
-uv run work_order_process_v1.1 run --year 2026 --month 6
+uv run work_order_process run --year 2026 --month 6
 ```
 
 调试时限制每月最多拉取 10 条列表记录：
 
 ```powershell
-uv run work_order_process_v1.1 run --year 2026 --limit-per-month 10 --overwrite
+uv run work_order_process run --year 2026 --limit-per-month 10 --overwrite
 ```
 
 调整样本详情并发线程数：
 
 ```powershell
-uv run work_order_process_v1.1 run --year 2026 --detail-workers 4
+uv run work_order_process run --year 2026 --detail-workers 4
 ```
 
 只导出月度工单合集，不拉取详情样本：
 
 ```powershell
-uv run work_order_process_v1.1 monthly-tickets --year 2026
-uv run work_order_process_v1.1 monthly-tickets --year 2026 --month 6
+uv run work_order_process monthly-tickets --year 2026
+uv run work_order_process monthly-tickets --year 2026 --month 6
 ```
 
 按工单模板抽样：
 
 ```powershell
-uv run work_order_process_v1.1 template-samples --year 2026 --month 6 --sample-size 3 --seed 202606 --overwrite
+uv run work_order_process template-samples --year 2026 --month 6 --sample-size 3 --seed 202606 --overwrite
 ```
 
 探测认证和接口：
 
 ```powershell
-uv run work_order_process_v1.1 probe
+uv run work_order_process probe
 ```
 
 导出数据字典：
 
 ```powershell
-uv run work_order_process_v1.1 dictionary
+uv run work_order_process dictionary
 ```
 
 ## MySQL 入库
@@ -93,50 +93,50 @@ uv run work_order_process_v1.1 dictionary
 初始化 5 表结构和分区：
 
 ```powershell
-uv run work_order_process_v1.1 mysql-init
+uv run work_order_process mysql-init
 ```
 
 导入单条工单：
 
 ```powershell
-uv run work_order_process_v1.1 mysql-import-ticket --ticket-id 22256891
+uv run work_order_process mysql-import-ticket --ticket-id 22256891
 ```
 
 导入某个月：
 
 ```powershell
-uv run work_order_process_v1.1 mysql-import-month --year 2025 --month 1
+uv run work_order_process mysql-import-month --year 2025 --month 1
 ```
 
 导入全年：
 
 ```powershell
-uv run work_order_process_v1.1 mysql-import-year --year 2025
+uv run work_order_process mysql-import-year --year 2025
 ```
 
 低速试跑建议：
 
 ```powershell
-uv run work_order_process_v1.1 mysql-import-month --year 2025 --month 1 --max-workers 2 --batch-size 20 --api-rate-limit 3
+uv run work_order_process mysql-import-month --year 2025 --month 1 --max-workers 2 --batch-size 20 --api-rate-limit 3
 ```
 
 导入客户和联系人：
 
 ```powershell
-uv run work_order_process_v1.1 mysql-import-customers
-uv run work_order_process_v1.1 mysql-import-contacts
+uv run work_order_process mysql-import-customers
+uv run work_order_process mysql-import-contacts
 ```
 
 提前创建未来分区：
 
 ```powershell
-uv run work_order_process_v1.1 mysql-add-partitions --months-ahead 6
+uv run work_order_process mysql-add-partitions --months-ahead 6
 ```
 
 查看最近同步日志：
 
 ```powershell
-uv run work_order_process_v1.1 mysql-sync-log --log-limit 20
+uv run work_order_process mysql-sync-log --log-limit 20
 ```
 
 ## 输出目录
