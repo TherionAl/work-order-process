@@ -90,6 +90,8 @@ uv run work_order_process_v1.1 dictionary
 
 ## MySQL 入库
 
+服务器部署、调度、补录与对账说明见 [服务器运行手册](docs/server_operations.md)。
+
 初始化 5 表结构和分区：
 
 ```powershell
