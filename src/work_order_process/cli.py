@@ -48,6 +48,7 @@ from .monthly_export import (
     export_year_monthly_tickets_and_samples,
 )
 from .erp_import import import_erp_xlsx
+from .customer_account_import import import_customer_account_xlsx
 from .personnel_import import import_personnel_xls_to_mysql
 from .time_metrics import (
     DEFAULT_CALENDAR_PATH,
@@ -73,7 +74,7 @@ def main() -> None:
             "mysql-import-customers", "mysql-import-contacts", "mysql-probe-customers", "mysql-probe-contacts",
             "mysql-import-personnel",
             "mysql-add-partitions", "mysql-sync-log",
-            "import-erp",
+            "import-erp", "import-customer-account",
             "metric-month", "metric-ticket",
             "probe", "dictionary",
         ],
@@ -165,6 +166,21 @@ def main() -> None:
         default=None,
         help="import-erp: ERP新旧合并数据 Excel 文件路径。",
     )
+    parser.add_argument(
+        "--customer-account-file",
+        default=None,
+        help="import-customer-account: 客户台账明细 Excel 文件路径。",
+    )
+    parser.add_argument(
+        "--create-date",
+        default=None,
+        help="import-customer-account: 数据日期，如 20260710。",
+    )
+    parser.add_argument(
+        "--sheet",
+        default=None,
+        help="import-customer-account: Sheet 名称（默认第一个）。",
+    )
     args = parser.parse_args()
 
     settings = load_settings()
@@ -208,6 +224,17 @@ def main() -> None:
             raise ApiError("import-erp 需要传入 --erp-file。")
         report = import_erp_xlsx(settings.mysql, Path(args.erp_file))
         _print_erp_import_report(report)
+        return
+
+    if args.command == "import-customer-account":
+        if not args.customer_account_file:
+            raise ApiError("import-customer-account 需要传入 --customer-account-file。")
+        if not args.create_date:
+            raise ApiError("import-customer-account 需要传入 --create-date。")
+        report = import_customer_account_xlsx(
+            settings.mysql, Path(args.customer_account_file), args.create_date, args.sheet,
+        )
+        _print_customer_account_import_report(report)
         return
 
     if args.command == "mysql-add-partitions":
@@ -442,6 +469,18 @@ def _print_erp_import_report(report: dict[str, Any]) -> None:
     table.add_row("Rows", str(report["rows"]))
     table.add_row("Inserted", str(report["inserted"]))
     table.add_row("Skipped", str(report["skipped"]))
+    table.add_row("Duration (s)", str(report["seconds"]))
+    console.print(table)
+
+
+def _print_customer_account_import_report(report: dict[str, Any]) -> None:
+    """输出客户台账导入摘要。"""
+    table = Table("Metric", "Value")
+    table.add_row("File", report["file"])
+    table.add_row("Rows", str(report["rows"]))
+    table.add_row("Inserted", str(report["inserted"]))
+    table.add_row("Skipped", str(report["skipped"]))
+    table.add_row("Cleaned", str(report["cleaned"]))
     table.add_row("Duration (s)", str(report["seconds"]))
     console.print(table)
 

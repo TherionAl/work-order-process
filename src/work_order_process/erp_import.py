@@ -10,6 +10,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from .config import MySQLConfig
+from .auxiliary_schema import ensure_auxiliary_schema
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ COLUMN_MAP = [
     ("其他业务类型", "other_business_type"),
     ("无效合同类型", "invalid_contract_type"),
     ("数据来源", "data_source"),
-    ("文件生成时间戳", "file_timestamp"),
+    ("文件生成时间戳", "create_date"),
     ("文件来源时间戳", "file_source_date"),
 ]
 
@@ -112,7 +113,7 @@ def _to_decimal(value) -> float | None:
     if value is None or value == "":
         return None
     try:
-        return float(value)
+        return float(str(value).replace(",", "").strip())
     except (ValueError, TypeError):
         return None
 
@@ -133,9 +134,18 @@ def _to_str(value) -> str | None:
     return s if s else None
 
 
+def _to_create_date(value) -> str | None:
+    """把 Excel file_timestamp 20260713165231 转为 20260713。"""
+    if value is None or value == "":
+        return None
+    s = str(value).strip()
+    return s[:8] if len(s) >= 8 else s
+
+
 # 值转换函数
 CONVERTERS = {
     "seq_no": _to_int,
+    "create_date": _to_create_date,
     "contract_apply_date": _to_date,
     "archive_date": _to_date,
     "ops_start_date": _to_date,
@@ -176,6 +186,7 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
     import pymysql
     import time
 
+    ensure_auxiliary_schema(config)
     file_ts = datetime.now().strftime("%Y%m%d%H%M%S")
     logger.info("打开文件: %s", file_path)
     wb = load_workbook(file_path, read_only=True, data_only=True)

@@ -68,18 +68,21 @@ CREATE TABLE IF NOT EXISTS erp_data (
   other_business_type VARCHAR(50) NULL COMMENT '其他业务类型',
   invalid_contract_type VARCHAR(50) NULL COMMENT '无效合同类型',
   data_source VARCHAR(50) NULL COMMENT '数据来源',
-  file_timestamp VARCHAR(20) NOT NULL COMMENT '文件生成时间戳',
+  create_date VARCHAR(8) NOT NULL COMMENT '数据日期',
   file_source_date VARCHAR(20) NULL COMMENT '文件来源日期',
   imported_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '入库时间',
-  PRIMARY KEY (id),
-  UNIQUE KEY uk_snapshot_line (contract_id, item_code, exec_detail_id, file_timestamp),
+  PRIMARY KEY (id, create_date),
+  UNIQUE KEY uk_snapshot_line (contract_id, item_code, exec_detail_id, create_date),
   INDEX idx_province_city (province, city),
   INDEX idx_contract_type (contract_type),
   INDEX idx_sales_dept (sales_dept),
   INDEX idx_product_line (product_line1, product_line2),
   INDEX idx_data_source (data_source),
-  INDEX idx_file_timestamp (file_timestamp),
+  INDEX idx_create_date (create_date),
   INDEX idx_contract_date (contract_apply_date),
   INDEX idx_doc_status (doc_status),
   INDEX idx_final_customer (final_customer)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ERP合同数据';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ERP合同数据'
+PARTITION BY RANGE COLUMNS(create_date) (
+  PARTITION p_future VALUES LESS THAN (MAXVALUE)
+);
