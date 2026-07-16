@@ -56,16 +56,18 @@ business measures and must never overwrite one another.
 
 ## Calculation Contract
 
-The calculation implementation must reproduce the supplied Excel AU:BC
-results, not replace them with a different inclusive-overlap interpretation.
+The supplied Excel AU:BC formulas define the intended business fields, but
+the code is authoritative when a formula is internally inconsistent or wrong.
+The generated values and documentation workbook use the corrected code result,
+not a stale or incorrect Excel formula cache.
 
 1. `contract_days` is `DAYS(ops_end_date, ops_start_date) + 1`.
 2. The previous and current statistical periods come from configuration.
-3. Previous/current unadjusted allocation follows the Excel `IFS` branches:
-   no overlap is zero; a fully contained service period receives the complete
-   product amount; a service period containing the full statistical year uses
-   `365 / contract_days * product_amount`; partial overlap uses Excel `DAYS`
-   semantics without an additional day.
+3. Previous/current unadjusted allocation uses the intersection of service and
+   statistical periods. Both the first and last overlapping day are included:
+   `overlap_days = max(0, min(service_end, period_end) -
+   max(service_start, period_start) + 1)`, then
+   `product_amount * overlap_days / contract_days`.
 4. Previous adjusted allocation is zero when contract application year equals
    the current statistical year; otherwise it equals previous unadjusted
    allocation.
@@ -73,9 +75,9 @@ results, not replace them with a different inclusive-overlap interpretation.
    previous unadjusted allocation only when the contract application year is
    the current statistical year and previous unadjusted allocation is positive.
 
-The tests must include formula-equivalence examples from the supplied workbook,
-including a partial-year contract where the Excel `DAYS` rule differs from an
-inclusive day count.
+The tests must include a partial-year example from the supplied workbook where
+the old Excel formula omitted the first overlapping day. The expected code
+result must use the corrected inclusive day count.
 
 ## Import Contract
 
