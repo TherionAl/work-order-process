@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pymysql
+
 from .config import MySQLConfig, PROJECT_ROOT
+from .erp_migrations import ensure_erp_allocation_columns
 
 
 def ensure_auxiliary_schema(config: MySQLConfig) -> None:
@@ -13,8 +16,6 @@ def ensure_auxiliary_schema(config: MySQLConfig) -> None:
     Existing tables are intentionally left unchanged. This keeps the helper
     idempotent and avoids altering a populated production table implicitly.
     """
-
-    import pymysql
 
     sql_dir = PROJECT_ROOT / "sql"
     statements = [
@@ -33,3 +34,4 @@ def ensure_auxiliary_schema(config: MySQLConfig) -> None:
         with connection.cursor() as cursor:
             for statement in statements:
                 cursor.execute(statement)
+    ensure_erp_allocation_columns(config)
