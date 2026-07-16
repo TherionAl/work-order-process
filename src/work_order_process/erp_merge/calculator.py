@@ -62,7 +62,7 @@ def add_statistical_allocation_columns(
     product_amount = parse_number_series(
         result.get("产品金额", pd.Series("", index=result.index))
     )
-    contract_days = ((service_end - service_start).dt.days + 1).clip(lower=0).fillna(0)
+    contract_days = (service_end - service_start).dt.days.add(1).fillna(0)
 
     last_year_amount = calculate_period_allocation(
         service_start, service_end, product_amount, contract_days, last_start, last_end
