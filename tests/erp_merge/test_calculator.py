@@ -50,7 +50,14 @@ def test_calculate_period_allocation_uses_inclusive_overlap_days():
         pd.Timestamp("2026-12-31"),
     )
 
-    assert result.iloc[0] == pytest.approx(25000 * 175 / 365)
+    old_excel_result = 25000 * 174 / 365
+    assert old_excel_result == 11917.808219178081
+
+    corrected_result = result.iloc[0]
+    assert corrected_result == pytest.approx(25000 * 175 / 365)
+    assert corrected_result != pytest.approx(old_excel_result), (
+        "Excel DAYS() omitted the service start date, producing 174 instead of 175 days"
+    )
 
 
 def test_calculate_period_allocation_returns_zero_for_invalid_inputs():
