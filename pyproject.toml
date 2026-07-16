@@ -1,7 +1,7 @@
 [project]
 name = "work_order_process"
-version = "1.1.0"
-description = "Fetch, normalize, and import Bosssoft work-order data."
+version = "1.2.0"
+description = "Fetch, normalize, and import Bosssoft work-order data, merge ERP data."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -12,13 +12,16 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "rich>=15.0.0",
     "xlrd>=2.0.2",
-    "openpyxl>=3.1.0",
+    "openpyxl>=3.1.5",
     "apscheduler>=3.10.0",
     "python-dateutil>=2.8.0",
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
 ]
 
 [project.scripts]
 "work_order_process" = "work_order_process.cli:main"
+"erp-merge" = "work_order_process.erp_merge.cli:main"
 
 [build-system]
 requires = ["hatchling"]
