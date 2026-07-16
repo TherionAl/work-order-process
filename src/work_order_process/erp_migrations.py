@@ -11,11 +11,11 @@ ERP_ALLOCATION_COLUMNS = {
     "contract_days": "INT NULL COMMENT '合同天数'",
     "prev_year_period_start": "DATE NULL COMMENT '去年统计起始日期'",
     "prev_year_period_end": "DATE NULL COMMENT '去年统计截止日期'",
-    "prev_year_calc_amort": "DECIMAL(18,2) NULL COMMENT '去年按期间分摊服务费'",
+    "prev_year_calc_amort": "DECIMAL(18,2) NULL COMMENT '去年按期分摊服务费'",
     "prev_year_adjusted_amort": "DECIMAL(18,2) NULL COMMENT '去年倒签调整后分摊服务费'",
     "cur_year_period_start": "DATE NULL COMMENT '今年统计起始日期'",
     "cur_year_period_end": "DATE NULL COMMENT '今年统计截止日期'",
-    "cur_year_calc_amort": "DECIMAL(18,2) NULL COMMENT '今年按期间分摊服务费'",
+    "cur_year_calc_amort": "DECIMAL(18,2) NULL COMMENT '今年按期分摊服务费'",
     "cur_year_adjusted_amort": "DECIMAL(18,2) NULL COMMENT '今年倒签调整后分摊服务费'",
 }
 
