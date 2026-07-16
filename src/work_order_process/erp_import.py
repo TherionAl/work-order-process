@@ -6,93 +6,65 @@ import argparse
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from openpyxl import load_workbook
 
 from .config import MySQLConfig
 from .auxiliary_schema import ensure_auxiliary_schema
+from .erp_schema import LEGACY_ERP_COLUMN_MAP
 
 logger = logging.getLogger(__name__)
 
+BASELINE_SALES_PLATFORM_CREATE_DATE = "20260713"
+SALES_PLATFORM_BASELINE_KEY_COLUMNS = ("contract_id", "item_code", "exec_detail_id")
+SYSTEM_ENGINEER_BY_SALES_PLATFORM = {
+    "博思智合": "黄迪",
+    "广东瑞联": "黄迪",
+    "广西分公司": "黄迪",
+    "贵州分公司": "黄迪",
+    "河北分公司": "黄迪",
+    "深圳分公司": "梁通",
+    "西藏分公司": "黄迪",
+    "北京分公司": "黄微",
+    "山西分公司": "黄微",
+    "四川分公司": "黄微",
+    "苏皖分公司": "黄微",
+    "总部大区": "黄微",
+    "黑龙江博思": "李金艳",
+    "湖南分公司": "李金艳",
+    "江西分公司": "李金艳",
+    "辽宁分公司": "李金艳",
+    "厦门分公司": "李金艳",
+    "山东分公司": "李金艳",
+    "甘肃分公司": "苏远星",
+    "湖北博思": "苏远星",
+    "吉林分公司": "梁通",
+    "青海分公司": "苏远星",
+    "陕西分公司": "苏远星",
+    "中央": "苏远星",
+    "重庆分公司": "苏远星",
+    "内蒙古金财": "庄明霞",
+    "宁夏分公司": "庄明霞",
+    "上海分公司": "庄明霞",
+    "天津分公司": "庄明霞",
+    "新疆分公司": "庄明霞",
+}
+
 # Excel 列名 → DB 列名（按顺序对应 Sheet1 的 66 列）
-COLUMN_MAP = [
-    ("序号", "seq_no"),
-    ("合同编号", "contract_id"),
-    ("销售组织", "sales_org"),
-    ("是否初始化", "is_initialized"),
-    ("合同名称", "contract_name"),
-    ("合同申请日期", "contract_apply_date"),
-    ("销售业绩部门", "sales_dept"),
-    ("申请人", "applicant"),
-    ("销售员", "sales_person"),
-    ("签约客户", "sign_customer"),
-    ("最终客户", "final_customer"),
-    ("第三方", "third_party"),
-    ("合同类型", "contract_type"),
-    ("暂估运维运营", "is_estimated_ops"),
-    ("虚拟合同", "is_virtual"),
-    ("2026运维saas续签合同", "is_2026_saas_renew"),
-    ("单据状态", "doc_status"),
-    ("关闭状态", "close_status"),
-    ("合同执行状态", "exec_status"),
-    ("归档状态", "archive_status"),
-    ("归档日期", "archive_date"),
-    ("合同总金额", "total_amount"),
-    ("免费运维期（月）", "free_ops_months"),
-    ("年运维约定金额", "annual_ops_amount"),
-    ("城市", "city"),
-    ("省份", "province"),
-    ("企业版销售合同明细id", "sales_contract_detail_id"),
-    ("标的行编码", "item_code"),
-    ("标的", "item_name"),
-    ("业务类型", "business_type"),
-    ("交付项目编码", "project_code"),
-    ("交付项目", "project_name"),
-    ("运维签约类型", "ops_sign_type"),
-    ("明细数量", "detail_qty"),
-    ("销售单价", "unit_price"),
-    ("明细价税合计", "detail_amount_with_tax"),
-    ("明细运维开始开始日期", "ops_start_date"),
-    ("明细运维结束日期", "ops_end_date"),
-    ("执行明细id", "exec_detail_id"),
-    ("产品物料", "product_material"),
-    ("产品占比", "product_ratio"),
-    ("云服务类型", "cloud_service_type"),
-    ("产品金额", "product_amount"),
-    ("一级产品线", "product_line1"),
-    ("二级产品线", "product_line2"),
-    ("产品公司", "product_company"),
-    ("所属事业部", "division"),
-    ("累计开票金额", "cum_billing"),
-    ("累计回款金额", "cum_collection"),
-    ("累计确收金额", "cum_revenue"),
-    ("当年开票金额", "cur_year_billing"),
-    ("去年同期开票金额", "prev_year_billing"),
-    ("当年回款金额", "cur_year_collection"),
-    ("去年同期回款金额", "prev_year_collection"),
-    ("当年收入金额", "cur_year_revenue"),
-    ("去年同期收入金额", "prev_year_revenue"),
-    ("当年应分摊金额", "cur_year_amort"),
-    ("去年同期应分摊金额", "prev_year_amort"),
-    ("营销平台", "sales_platform"),
-    ("体系工程师", "system_engineer"),
-    ("是否公有云", "is_public_cloud"),
-    ("是否一次性收入", "is_one_time_revenue"),
-    ("合同分类", "contract_category"),
-    ("业务类别", "business_category"),
-    ("其他业务类型", "other_business_type"),
-    ("无效合同类型", "invalid_contract_type"),
-    ("数据来源", "data_source"),
-    ("文件生成时间戳", "create_date"),
-    ("文件来源时间戳", "file_source_date"),
-]
+COLUMN_MAP = LEGACY_ERP_COLUMN_MAP
 
 INSERT_SQL = (
-    "INSERT IGNORE INTO erp_data ("
+    "INSERT INTO erp_data ("
     + ", ".join(col for _, col in COLUMN_MAP)
     + ") VALUES ("
     + ", ".join(["%s"] * len(COLUMN_MAP))
-    + ")"
+    + ") ON DUPLICATE KEY UPDATE "
+    + ", ".join(
+        f"{col} = VALUES({col})"
+        for _, col in COLUMN_MAP
+        if col not in {"contract_id", "item_code", "exec_detail_id", "create_date"}
+    )
 )
 
 
@@ -178,6 +150,68 @@ def convert(col_name: str, value) -> object:
     return _to_str(value)
 
 
+SalesPlatformBaseline = dict[tuple[str, str | None, str | None], str | None]
+SystemEngineerMapping = dict[str, str]
+
+
+def _baseline_key(row: dict[str, Any]) -> tuple[str, str | None, str | None] | None:
+    contract_id = row.get("contract_id")
+    if contract_id is None:
+        return None
+    return (
+        str(contract_id),
+        row.get("item_code"),
+        row.get("exec_detail_id"),
+    )
+
+
+def apply_baseline_sales_platform(
+    row: dict[str, Any],
+    baseline: SalesPlatformBaseline,
+    baseline_create_date: str = BASELINE_SALES_PLATFORM_CREATE_DATE,
+) -> bool:
+    """Reuse the 20260713 sales_platform for business lines that already existed.
+
+    Only sales_platform is special-cased. All other values in row remain the
+    current Excel import values.
+    """
+    if row.get("create_date") == baseline_create_date:
+        return False
+    key = _baseline_key(row)
+    if key is None or key not in baseline:
+        return False
+    row["sales_platform"] = baseline[key]
+    return True
+
+
+def load_sales_platform_baseline(cursor: Any, create_date: str = BASELINE_SALES_PLATFORM_CREATE_DATE) -> SalesPlatformBaseline:
+    """Load the sales_platform baseline keyed by contract/item/exec detail."""
+    cursor.execute(
+        """
+        SELECT contract_id, item_code, exec_detail_id, sales_platform
+        FROM erp_data
+        WHERE create_date = %s
+        """,
+        (create_date,),
+    )
+    baseline: SalesPlatformBaseline = {}
+    for contract_id, item_code, exec_detail_id, sales_platform in cursor.fetchall():
+        baseline[(str(contract_id), item_code, exec_detail_id)] = sales_platform
+    return baseline
+
+
+def apply_sales_platform_system_engineer(
+    row: dict[str, Any],
+    mapping: SystemEngineerMapping = SYSTEM_ENGINEER_BY_SALES_PLATFORM,
+) -> bool:
+    """Set system_engineer from the final sales_platform fixed mapping."""
+    sales_platform = row.get("sales_platform")
+    if not sales_platform or sales_platform not in mapping:
+        return False
+    row["system_engineer"] = mapping[sales_platform]
+    return True
+
+
 def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000) -> dict:
     """把 ERP Excel 导入 MySQL。
 
@@ -194,7 +228,13 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
 
     headers: list[str] = []
     inserted = 0
+    updated = 0
+    unchanged = 0
     skipped = 0
+    reused_baseline_sales_platform = 0
+    new_sales_platform = 0
+    applied_system_engineer_mapping = 0
+    kept_excel_system_engineer = 0
     started = time.time()
 
     pymysql_mod = pymysql
@@ -210,6 +250,12 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
 
     try:
         with conn.cursor() as cursor:
+            sales_platform_baseline = load_sales_platform_baseline(cursor)
+            logger.info(
+                "已加载 %s 行 %s 营销平台基准",
+                len(sales_platform_baseline),
+                BASELINE_SALES_PLATFORM_CREATE_DATE,
+            )
             for i, row in enumerate(ws.iter_rows(values_only=True)):
                 if i == 0:
                     headers = [str(c).strip() if c else "" for c in row]
@@ -217,20 +263,36 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
                         logger.warning("Excel 列头不完全匹配定义，仍按列顺序映射")
                     continue
 
-                db_values = []
+                db_row: dict[str, Any] = {}
                 for j, (_, col) in enumerate(COLUMN_MAP):
                     val = row[j] if j < len(row) else None
-                    db_values.append(convert(col, val))
+                    db_row[col] = convert(col, val)
 
-                # 第 5 列是 contract_id（必填）
-                if db_values[1] is None:
+                # 合同编号是业务必填字段。
+                if db_row["contract_id"] is None:
                     skipped += 1
                     continue
 
+                if apply_baseline_sales_platform(db_row, sales_platform_baseline):
+                    reused_baseline_sales_platform += 1
+                else:
+                    new_sales_platform += 1
+
+                if apply_sales_platform_system_engineer(db_row):
+                    applied_system_engineer_mapping += 1
+                else:
+                    kept_excel_system_engineer += 1
+
+                db_values = [db_row[col] for _, col in COLUMN_MAP]
+
                 try:
                     cursor.execute(INSERT_SQL, db_values)
-                    if cursor.rowcount:
+                    if cursor.rowcount == 1:
                         inserted += 1
+                    elif cursor.rowcount == 2:
+                        updated += 1
+                    elif cursor.rowcount == 0:
+                        unchanged += 1
                     else:
                         skipped += 1
                 except Exception:
@@ -246,12 +308,27 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
         wb.close()
 
     seconds = round(time.time() - started, 1)
-    logger.info("导入完成: 插入 %d, 跳过 %d, 耗时 %ss", inserted, skipped, seconds)
+    logger.info(
+        "导入完成: 插入 %d, 更新 %d, 未变化 %d, 跳过 %d, 复用基准营销平台 %d, 套用体系工程师映射 %d, 耗时 %ss",
+        inserted,
+        updated,
+        unchanged,
+        skipped,
+        reused_baseline_sales_platform,
+        applied_system_engineer_mapping,
+        seconds,
+    )
     return {
         "file": file_path.name,
         "rows": i - 1 if i else 0,
         "inserted": inserted,
+        "updated": updated,
+        "unchanged": unchanged,
         "skipped": skipped,
+        "reused_baseline_sales_platform": reused_baseline_sales_platform,
+        "new_sales_platform": new_sales_platform,
+        "applied_system_engineer_mapping": applied_system_engineer_mapping,
+        "kept_excel_system_engineer": kept_excel_system_engineer,
         "seconds": seconds,
     }
 
