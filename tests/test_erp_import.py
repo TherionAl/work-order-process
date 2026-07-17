@@ -203,3 +203,9 @@ def test_import_reordered_standard_sheet_maps_allocation_values_by_header(
     assert db_values["cur_year_period_end"] == "2026-12-31"
     assert db_values["cur_year_calc_amort"] == 21.25
     assert db_values["cur_year_adjusted_amort"] == 22.5
+
+
+def test_date_converter_replaces_old_erp_placeholders_with_null() -> None:
+    assert erp_import.convert("archive_date", "/") is None
+    assert erp_import.convert("archive_date", "0000-12-30") is None
+    assert erp_import.convert("archive_date", "2026-07-13") == "2026-07-13"

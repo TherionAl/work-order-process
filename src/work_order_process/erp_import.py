@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -80,10 +80,20 @@ def _to_date(value) -> str | None:
         return None
     if isinstance(value, datetime):
         return value.strftime("%Y-%m-%d")
+    if isinstance(value, date):
+        return value.strftime("%Y-%m-%d")
     s = str(value).strip()
-    if not s:
+    if not s or s in {"/", "-", "0", "0.0", "0000-00-00", "0000-12-30"}:
         return None
-    return s
+    try:
+        parsed = (
+            datetime.strptime(s, "%Y%m%d")
+            if len(s) == 8 and s.isdigit()
+            else datetime.fromisoformat(s.replace("/", "-"))
+        )
+    except ValueError:
+        return None
+    return parsed.strftime("%Y-%m-%d")
 
 
 def _to_decimal(value) -> float | None:
