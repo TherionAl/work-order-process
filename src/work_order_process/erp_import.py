@@ -273,11 +273,25 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
     import pymysql
     import time
 
-    ensure_auxiliary_schema(config)
     logger.info("打开文件: %s", file_path)
     wb = load_workbook(file_path, read_only=True, data_only=True)
-    ws = find_standard_sheet(wb)
-    headers = _header_labels(ws)
+    try:
+        ws = find_standard_sheet(wb)
+        headers = _header_labels(ws)
+        ensure_auxiliary_schema(config)
+        pymysql_mod = pymysql
+        conn = pymysql_mod.connect(
+            host=config.host,
+            port=config.port,
+            user=config.user,
+            password=config.password,
+            database=config.database,
+            charset="utf8mb4",
+            autocommit=False,
+        )
+    except Exception:
+        wb.close()
+        raise
 
     inserted = 0
     updated = 0
@@ -289,17 +303,6 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
     kept_excel_system_engineer = 0
     data_rows = 0
     started = time.time()
-
-    pymysql_mod = pymysql
-    conn = pymysql_mod.connect(
-        host=config.host,
-        port=config.port,
-        user=config.user,
-        password=config.password,
-        database=config.database,
-        charset="utf8mb4",
-        autocommit=False,
-    )
 
     try:
         with conn.cursor() as cursor:

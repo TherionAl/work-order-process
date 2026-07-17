@@ -110,6 +110,40 @@ def test_find_standard_sheet_rejects_nonstandard_layouts(headers: list[str]) -> 
         erp_import.find_standard_sheet(workbook)
 
 
+def test_import_rejects_81_column_presentation_before_database_setup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "presentation.xlsx"
+    _write_workbook(
+        path,
+        [*standard_headers(), "presentation_only", "presentation_note", "presentation_total"],
+        [],
+    )
+    schema_calls = 0
+    connect_calls = 0
+
+    def fail_if_schema_is_called(config) -> None:
+        nonlocal schema_calls
+        schema_calls += 1
+
+    def fail_if_connect_is_called(**kwargs):
+        nonlocal connect_calls
+        connect_calls += 1
+        raise AssertionError("invalid workbook must not connect to MySQL")
+
+    monkeypatch.setattr(erp_import, "ensure_auxiliary_schema", fail_if_schema_is_called)
+    monkeypatch.setitem(sys.modules, "pymysql", SimpleNamespace(connect=fail_if_connect_is_called))
+
+    with pytest.raises(ValueError):
+        erp_import.import_erp_xlsx(
+            SimpleNamespace(host="fake", port=3306, user="fake", password="fake", database="fake"),
+            path,
+        )
+
+    assert schema_calls == 0
+    assert connect_calls == 0
+
+
 def test_import_legacy_sheet_inserts_null_for_all_allocation_columns(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
