@@ -249,7 +249,9 @@ def _document_date_value(value: object) -> object:
     if not isinstance(excel_value, str) or not excel_value.strip():
         return excel_value
     parsed = pd.to_datetime(excel_value.strip(), errors="coerce")
-    return parsed.to_pydatetime() if not pd.isna(parsed) else excel_value
+    if pd.isna(parsed) or not 1 <= parsed.year <= 9999:
+        return excel_value
+    return parsed.to_pydatetime()
 
 
 def _document_header_cell(sheet, value: str) -> WriteOnlyCell:

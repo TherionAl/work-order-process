@@ -59,3 +59,18 @@ def test_write_document_workbook_requires_exact_standard_headers(tmp_path: Path)
 
     with pytest.raises(ValueError):
         write_document_workbook(invalid_frame, tmp_path / "invalid.xlsx")
+
+
+def test_write_document_workbook_preserves_year_zero_date_text(tmp_path: Path) -> None:
+    output_file = tmp_path / "erp-document-invalid-date.xlsx"
+    frame = _standard_frame()
+    frame.loc[0, "归档日期"] = "0000-12-30"
+
+    write_document_workbook(frame, output_file)
+
+    workbook = load_workbook(output_file, data_only=True)
+    data_sheet = workbook["文档数据"]
+    headers = [cell.value for cell in data_sheet[1]]
+    row = dict(zip(headers, [cell.value for cell in data_sheet[2]], strict=True))
+    assert row["归档日期"] == "0000-12-30"
+    workbook.close()
