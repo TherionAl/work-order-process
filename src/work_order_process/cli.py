@@ -50,6 +50,7 @@ from .monthly_export import (
 from .erp_import import import_erp_xlsx
 from .customer_account_import import import_customer_account_xlsx
 from .personnel_import import import_personnel_xls_to_mysql
+from .revenue_summary import generate_revenue_summary
 from .time_metrics import (
     DEFAULT_CALENDAR_PATH,
     DEFAULT_METRICS_CONFIG,
@@ -75,6 +76,7 @@ def main() -> None:
             "mysql-import-personnel",
             "mysql-add-partitions", "mysql-sync-log",
             "import-erp", "import-customer-account",
+            "generate-revenue-summary",
             "metric-month", "metric-ticket",
             "probe", "dictionary",
         ],
@@ -172,6 +174,21 @@ def main() -> None:
         help="import-customer-account: 客户台账明细 Excel 文件路径。",
     )
     parser.add_argument(
+        "--revenue-target-file",
+        default=None,
+        help="generate-revenue-summary: 含固定收入目标值的月度 Excel 模板路径。",
+    )
+    parser.add_argument(
+        "--erp-create-date",
+        default=None,
+        help="generate-revenue-summary: ERP 快照日期，如 20260717；默认取最新快照。",
+    )
+    parser.add_argument(
+        "--revenue-output",
+        default=None,
+        help="generate-revenue-summary: 可选的统计结果 Excel 输出路径。",
+    )
+    parser.add_argument(
         "--create-date",
         default=None,
         help="import-customer-account: 数据日期，如 20260710。",
@@ -224,6 +241,23 @@ def main() -> None:
             raise ApiError("import-erp 需要传入 --erp-file。")
         report = import_erp_xlsx(settings.mysql, Path(args.erp_file))
         _print_erp_import_report(report)
+        return
+
+    if args.command == "generate-revenue-summary":
+        if args.month is None:
+            raise ApiError("generate-revenue-summary 需要传入 --month。")
+        if not args.revenue_target_file:
+            raise ApiError("generate-revenue-summary 需要传入 --revenue-target-file。")
+        report = generate_revenue_summary(
+            settings.mysql,
+            target_file=Path(args.revenue_target_file),
+            year=args.year,
+            month=args.month,
+            erp_create_date=args.erp_create_date,
+            output_dir=settings.output_dir,
+            output_path=Path(args.revenue_output) if args.revenue_output else None,
+        )
+        _print_revenue_summary_report(report)
         return
 
     if args.command == "import-customer-account":
@@ -470,6 +504,19 @@ def _print_erp_import_report(report: dict[str, Any]) -> None:
     table.add_row("Inserted", str(report["inserted"]))
     table.add_row("Skipped", str(report["skipped"]))
     table.add_row("Duration (s)", str(report["seconds"]))
+    console.print(table)
+
+
+def _print_revenue_summary_report(report: dict[str, Any]) -> None:
+    """输出运维服务月度营收统计摘要。"""
+
+    table = Table("Field", "Value")
+    table.add_row("Statistics period", f"{report['stat_year']}-{int(report['stat_month']):02d}")
+    table.add_row("ERP snapshot", str(report["erp_create_date"]))
+    table.add_row("Target platforms", str(report["target_platform_count"]))
+    table.add_row("Summary rows", str(report["rows"]))
+    table.add_row("Unmapped ERP platforms", ", ".join(report["unmapped_metric_platforms"]) or "None")
+    table.add_row("Output", str(report["output_path"]))
     console.print(table)
 
 
