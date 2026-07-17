@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import pandas as pd
 from openpyxl import Workbook
 
 from work_order_process import erp_import
@@ -203,6 +204,49 @@ def test_import_reordered_standard_sheet_maps_allocation_values_by_header(
     assert db_values["cur_year_period_end"] == "2026-12-31"
     assert db_values["cur_year_calc_amort"] == 21.25
     assert db_values["cur_year_adjusted_amort"] == 22.5
+
+
+def test_import_standard_dataframe_writes_snapshot_without_intermediate_workbook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = FakeConnection()
+    monkeypatch.setattr(erp_import, "ensure_auxiliary_schema", lambda config: None)
+    monkeypatch.setitem(
+        sys.modules,
+        "pymysql",
+        SimpleNamespace(connect=lambda **kwargs: connection),
+    )
+    header_to_column = dict(STANDARD_ERP_COLUMN_MAP)
+    values_by_column = {column: None for _, column in STANDARD_ERP_COLUMN_MAP}
+    values_by_column.update(
+        {
+            "contract_id": "CONTRACT-DATAFRAME",
+            "create_date": "20260717123000",
+            "prev_year_adjusted_amort": 12.5,
+            "cur_year_adjusted_amort": 22.5,
+        }
+    )
+    frame = pd.DataFrame(
+        [[values_by_column[header_to_column[header]] for header in standard_headers()]],
+        columns=standard_headers(),
+    )
+
+    report = erp_import.import_erp_dataframe(
+        SimpleNamespace(host="fake", port=3306, user="fake", password="fake", database="fake"),
+        frame,
+    )
+
+    inserts = [
+        values
+        for statement, values in connection.cursor_instance.statements
+        if statement.startswith("INSERT")
+    ]
+    assert len(inserts) == 1
+    db_values = dict(zip((column for _, column in STANDARD_ERP_COLUMN_MAP), inserts[0], strict=True))
+    assert db_values["contract_id"] == "CONTRACT-DATAFRAME"
+    assert db_values["prev_year_adjusted_amort"] == 12.5
+    assert db_values["cur_year_adjusted_amort"] == 22.5
+    assert report["create_dates"] == ["20260717"]
 
 
 def test_date_converter_replaces_old_erp_placeholders_with_null() -> None:

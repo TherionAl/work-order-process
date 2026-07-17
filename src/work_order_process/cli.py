@@ -189,6 +189,11 @@ def main() -> None:
         help="generate-revenue-summary: 可选的统计结果 Excel 输出路径。",
     )
     parser.add_argument(
+        "--revenue-preview",
+        action="store_true",
+        help="generate-revenue-summary: 仅生成 Excel 预览，不写入月度营收统计表。",
+    )
+    parser.add_argument(
         "--create-date",
         default=None,
         help="import-customer-account: 数据日期，如 20260710。",
@@ -256,6 +261,7 @@ def main() -> None:
             erp_create_date=args.erp_create_date,
             output_dir=settings.output_dir,
             output_path=Path(args.revenue_output) if args.revenue_output else None,
+            persist=not args.revenue_preview,
         )
         _print_revenue_summary_report(report)
         return
@@ -502,7 +508,19 @@ def _print_erp_import_report(report: dict[str, Any]) -> None:
     table.add_row("File", report["file"])
     table.add_row("Rows", str(report["rows"]))
     table.add_row("Inserted", str(report["inserted"]))
+    if "updated" in report:
+        table.add_row("Updated", str(report["updated"]))
+    if "unchanged" in report:
+        table.add_row("Unchanged", str(report["unchanged"]))
     table.add_row("Skipped", str(report["skipped"]))
+    if "reused_baseline_sales_platform" in report:
+        table.add_row("Reused baseline sales_platform", str(report["reused_baseline_sales_platform"]))
+    if "new_sales_platform" in report:
+        table.add_row("New-row Excel sales_platform", str(report["new_sales_platform"]))
+    if "applied_system_engineer_mapping" in report:
+        table.add_row("Applied system_engineer mapping", str(report["applied_system_engineer_mapping"]))
+    if "kept_excel_system_engineer" in report:
+        table.add_row("Kept Excel system_engineer", str(report["kept_excel_system_engineer"]))
     table.add_row("Duration (s)", str(report["seconds"]))
     console.print(table)
 

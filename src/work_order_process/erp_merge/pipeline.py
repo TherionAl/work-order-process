@@ -35,6 +35,7 @@ SOURCE_COLUMN = "数据来源"
 GENERATED_AT_COLUMN = "文件生成时间戳"
 SOURCE_DATE_COLUMN = "文件来源时间戳"
 EXTRA_OLD_TEXT_COLUMNS = ["其他业务类型", "无效合同类型"]
+SNAPSHOT_KEY_COLUMNS = ["合同编号", "标的行编码", "执行明细id"]
 DOCUMENT_CATEGORY_HEADER = "文档类别"
 DOCUMENT_CATEGORY_VALUE = "文档行"
 DOCUMENT_SHEET_NAME = "文档数据"
@@ -124,6 +125,23 @@ def _remove_old_rows_existing_in_new(
     return old_df.loc[~old_ids.isin(new_ids)].reset_index(drop=True)
 
 
+def _deduplicate_snapshot_lines(df: pd.DataFrame) -> pd.DataFrame:
+    """Match the ERP snapshot unique key before calculating allocation amounts."""
+    if not set(SNAPSHOT_KEY_COLUMNS).issubset(df.columns):
+        return df
+
+    normalized_keys = pd.DataFrame(
+        {
+            column: normalize_text(df[column])
+            for column in SNAPSHOT_KEY_COLUMNS
+        },
+        index=df.index,
+    )
+    complete_key = normalized_keys.ne("").all(axis=1)
+    duplicate = complete_key & normalized_keys.duplicated(keep="last")
+    return df.loc[~duplicate].reset_index(drop=True)
+
+
 def _source_date(files: Iterable[Path]) -> str:
     latest = ""
     for file_path in files:
@@ -158,6 +176,7 @@ def merge_erp_sources(
     merged = format_date_fields(merged)
     merged = format_numeric_fields(merged)
     merged = format_text_fields(merged)
+    merged = _deduplicate_snapshot_lines(merged)
 
     if "合同编号" in merged.columns:
         contract_numbers = normalize_text(merged["合同编号"])
@@ -242,6 +261,37 @@ def write_standard_sheet(df: pd.DataFrame, output_file: Path) -> None:
     workbook.save(output_file)
 
 
+def write_document_rows(
+    headers: list[str], rows: Iterable[tuple[object, ...]], output_file: Path
+) -> None:
+    """Write a readable ERP document workbook from a stream of standard rows."""
+    if headers != standard_headers():
+        raise ValueError("Document rows must use the complete standard ERP header order.")
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook(write_only=True)
+
+    sheet = workbook.create_sheet(DOCUMENT_SHEET_NAME)
+    sheet.freeze_panes = "A2"
+    sheet.append(
+        [_document_header_cell(sheet, header) for header in [DOCUMENT_CATEGORY_HEADER, *headers]]
+    )
+    for row in rows:
+        document_row: list[object] = [DOCUMENT_CATEGORY_VALUE]
+        for header, value in zip(headers, row, strict=True):
+            cell_value = _document_data_value(header, value)
+            if header in DOCUMENT_DATE_FIELDS and isinstance(
+                cell_value, (datetime, date)
+            ):
+                cell = WriteOnlyCell(sheet, value=cell_value)
+                cell.number_format = "yyyy-mm-dd"
+                document_row.append(cell)
+            else:
+                document_row.append(cell_value)
+        sheet.append(document_row)
+    workbook.save(output_file)
+
+
 def _document_date_value(value: object) -> object:
     excel_value = _excel_value(value)
     if excel_value is None or isinstance(excel_value, (datetime, date)):
@@ -262,51 +312,17 @@ def _document_header_cell(sheet, value: str) -> WriteOnlyCell:
     return cell
 
 
-def _document_data_cell(sheet, header: str, value: object) -> WriteOnlyCell:
-    cell_value = (
+def _document_data_value(header: str, value: object) -> object:
+    return (
         _document_date_value(value)
         if header in DOCUMENT_DATE_FIELDS
         else _excel_value(value)
     )
-    cell = WriteOnlyCell(sheet, value=cell_value)
-    if header in DOCUMENT_DATE_FIELDS and isinstance(cell.value, (datetime, date)):
-        cell.number_format = "yyyy-mm-dd"
-    return cell
 
 
 def write_document_workbook(df: pd.DataFrame, output_file: Path) -> None:
-    """Write a readable, non-importable ERP document workbook without copying the frame."""
+    """Write a readable, non-importable ERP document workbook from a frame."""
     headers = standard_headers()
     if df.columns.tolist() != headers:
         raise ValueError("文档工作簿仅接受列头及顺序均符合 78 列标准 Sheet1 的数据。")
-
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    workbook = Workbook(write_only=True)
-
-    instructions = workbook.create_sheet("说明")
-    instructions.freeze_panes = "A2"
-    instructions.append(["ERP 文档版使用说明"])
-    for text in [
-        "来源与用途：本文件由新旧 ERP 合并后的标准数据生成，供阅读、核对和业务沟通使用。",
-        "标准 Sheet1 固定为 78 列；只有标准 Sheet1 才是 ERP 导入数据源。",
-        "cur_year_amort 与 prev_year_amort 分别保留原 ERP 的 BQ、BR 原始值，和计算得到的年度分摊字段不同。",
-        "年度分摊按服务期与统计区间的重叠天数计算，起始日和结束日均计入。",
-        "本文档工作簿不能导入；文档数据表增加了文档类别列，导入程序会拒绝它。",
-        "只有显式提供 --import 时才会影响 MySQL；仅生成文件不会执行数据库导入。",
-    ]:
-        instructions.append([text])
-
-    sheet = workbook.create_sheet(DOCUMENT_SHEET_NAME)
-    sheet.freeze_panes = "A2"
-    sheet.append(
-        [_document_header_cell(sheet, header) for header in [DOCUMENT_CATEGORY_HEADER, *headers]]
-    )
-    for row in df.itertuples(index=False, name=None):
-        sheet.append(
-            [WriteOnlyCell(sheet, value=DOCUMENT_CATEGORY_VALUE)]
-            + [
-                _document_data_cell(sheet, header, value)
-                for header, value in zip(headers, row, strict=True)
-            ]
-        )
-    workbook.save(output_file)
+    write_document_rows(headers, df.itertuples(index=False, name=None), output_file)

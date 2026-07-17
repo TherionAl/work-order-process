@@ -42,6 +42,7 @@ def test_build_revenue_rows_calculates_four_groups_and_null_zero_denominator() -
     metrics = {
         "厦门分公司": {
             "recognized_revenue": Decimal("20"),
+            "recognized_revenue_excluding_estimate": Decimal("18"),
             "prior_year_recognized_revenue": Decimal("10"),
             "contracts_on_hand_amount": Decimal("30"),
             "prior_year_contracts_on_hand_amount": Decimal("15"),
@@ -68,11 +69,11 @@ def test_build_revenue_rows_calculates_four_groups_and_null_zero_denominator() -
 
     xiamen, hebei = rows
     assert xiamen["recognized_revenue"] == Decimal("20.00")
-    assert xiamen["recognized_revenue_excluding_estimate"] == Decimal("20.00")
+    assert xiamen["recognized_revenue_excluding_estimate"] == Decimal("18")
     assert xiamen["revenue_completion_rate"] == Decimal("0.200000")
     assert xiamen["contracts_on_hand_yoy_amount"] == Decimal("15.00")
     assert xiamen["contracts_on_hand_yoy_rate"] == Decimal("1.000000")
-    assert xiamen["recognized_revenue_yoy_rate"] == Decimal("1.000000")
+    assert xiamen["recognized_revenue_yoy_rate"] == Decimal("0.800000")
     assert xiamen["signing_yoy_rate"] == Decimal("1.000000")
 
     assert hebei["revenue_completion_rate"] == Decimal("0.000000")
@@ -130,6 +131,7 @@ def test_fetch_revenue_metrics_uses_confirmed_filters_and_adjusted_amortization(
             (
                 "厦门分公司",
                 Decimal("20"),
+                Decimal("18"),
                 Decimal("10"),
                 Decimal("30"),
                 Decimal("15"),
@@ -143,11 +145,13 @@ def test_fetch_revenue_metrics_uses_confirmed_filters_and_adjusted_amortization(
 
     statement, parameters = cursor.executed[0]
     assert "other_business_type = '非税票据'" in statement
-    assert "is_estimated_ops = '否'" in statement
+    assert "is_estimated_ops = '否'" not in statement.split("AS recognized_revenue,")[0]
+    assert "is_estimated_ops = '否'" in statement.split("AS recognized_revenue,")[1].split("AS recognized_revenue_excluding_estimate,")[0]
     assert "cur_year_adjusted_amort" in statement
     assert "prev_year_adjusted_amort" in statement
     assert parameters[-1] == "20260717"
     assert metrics["厦门分公司"]["contracts_on_hand_amount"] == Decimal("30")
+    assert metrics["厦门分公司"]["recognized_revenue_excluding_estimate"] == Decimal("18")
 
 
 def test_save_revenue_rows_upserts_one_row_per_month_and_platform() -> None:
@@ -217,6 +221,54 @@ def test_cli_generates_revenue_summary_with_explicit_period_and_snapshot(monkeyp
     assert captured["year"] == 2026
     assert captured["month"] == 6
     assert captured["erp_create_date"] == "20260717"
+
+
+def test_cli_preview_exports_revenue_summary_without_persisting(monkeypatch, tmp_path: Path) -> None:
+    from work_order_process import cli
+
+    captured: dict[str, object] = {}
+
+    def fake_generate(config, **kwargs):
+        captured["config"] = config
+        captured.update(kwargs)
+        return {
+            "stat_year": 2026,
+            "stat_month": 6,
+            "erp_create_date": "20260717",
+            "target_platform_count": 30,
+            "metric_platform_count": 30,
+            "rows": 30,
+            "unmapped_metric_platforms": [],
+            "output_path": str(tmp_path / "preview.xlsx"),
+        }
+
+    monkeypatch.setattr(cli, "generate_revenue_summary", fake_generate, raising=False)
+    monkeypatch.setattr(
+        cli,
+        "load_settings",
+        lambda: SimpleNamespace(mysql="mysql-config", output_dir=tmp_path, dictionary_path=tmp_path / "dictionary.pdf"),
+    )
+    monkeypatch.setattr(cli.DataDictionary, "from_pdf", lambda _: object())
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "work_order_process",
+            "generate-revenue-summary",
+            "--year",
+            "2026",
+            "--month",
+            "6",
+            "--revenue-target-file",
+            "targets.xlsx",
+            "--erp-create-date",
+            "20260717",
+            "--revenue-preview",
+        ],
+    )
+
+    cli.main()
+
+    assert captured["persist"] is False
 
 
 def test_revenue_schema_places_erp_snapshot_before_audit_columns_and_rounds_amounts() -> None:

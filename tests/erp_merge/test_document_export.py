@@ -33,7 +33,7 @@ def test_write_document_workbook_adds_nonimportable_document_layout(tmp_path: Pa
     write_document_workbook(_standard_frame(), output_file)
 
     workbook = load_workbook(output_file, data_only=True)
-    assert workbook.sheetnames == ["说明", "文档数据"]
+    assert workbook.sheetnames == ["文档数据"]
     data_sheet = workbook["文档数据"]
     headers = [cell.value for cell in data_sheet[1]]
     values = [cell.value for cell in data_sheet[2]]

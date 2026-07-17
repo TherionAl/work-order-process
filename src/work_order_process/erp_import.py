@@ -6,7 +6,7 @@ import argparse
 import logging
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Mapping
 
 from openpyxl import load_workbook
 
@@ -275,33 +275,26 @@ def apply_sales_platform_system_engineer(
     return True
 
 
-def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000) -> dict:
-    """把 ERP Excel 导入 MySQL。
-
-    返回 {"file": ..., "rows": ..., "inserted": ..., "skipped": ..., "seconds": ...}
-    """
+def _import_erp_records(
+    config: MySQLConfig,
+    excel_rows: Iterable[Mapping[str, object]],
+    source_name: str,
+    batch_size: int = 5000,
+) -> dict:
+    """Import normalized ERP records using the same rules for every source."""
     import pymysql
     import time
 
-    logger.info("打开文件: %s", file_path)
-    wb = load_workbook(file_path, read_only=True, data_only=True)
-    try:
-        ws = find_standard_sheet(wb)
-        headers = _header_labels(ws)
-        ensure_auxiliary_schema(config)
-        pymysql_mod = pymysql
-        conn = pymysql_mod.connect(
-            host=config.host,
-            port=config.port,
-            user=config.user,
-            password=config.password,
-            database=config.database,
-            charset="utf8mb4",
-            autocommit=False,
-        )
-    except Exception:
-        wb.close()
-        raise
+    ensure_auxiliary_schema(config)
+    conn = pymysql.connect(
+        host=config.host,
+        port=config.port,
+        user=config.user,
+        password=config.password,
+        database=config.database,
+        charset="utf8mb4",
+        autocommit=False,
+    )
 
     inserted = 0
     updated = 0
@@ -312,6 +305,7 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
     applied_system_engineer_mapping = 0
     kept_excel_system_engineer = 0
     data_rows = 0
+    create_dates: set[str] = set()
     started = time.time()
 
     try:
@@ -322,9 +316,8 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
                 len(sales_platform_baseline),
                 BASELINE_SALES_PLATFORM_CREATE_DATE,
             )
-            for row in ws.iter_rows(min_row=2, values_only=True):
+            for excel_row in excel_rows:
                 data_rows += 1
-                excel_row = dict(zip(headers, row))
                 db_row = {
                     column: convert(column, excel_row.get(header))
                     for header, column in IMPORT_COLUMN_MAP
@@ -334,6 +327,8 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
                 if db_row["contract_id"] is None:
                     skipped += 1
                     continue
+                if db_row["create_date"] is not None:
+                    create_dates.add(str(db_row["create_date"]))
 
                 if apply_baseline_sales_platform(db_row, sales_platform_baseline):
                     reused_baseline_sales_platform += 1
@@ -367,7 +362,6 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
         conn.commit()
     finally:
         conn.close()
-        wb.close()
 
     seconds = round(time.time() - started, 1)
     logger.info(
@@ -381,7 +375,7 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
         seconds,
     )
     return {
-        "file": file_path.name,
+        "file": source_name,
         "rows": data_rows,
         "inserted": inserted,
         "updated": updated,
@@ -391,8 +385,39 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
         "new_sales_platform": new_sales_platform,
         "applied_system_engineer_mapping": applied_system_engineer_mapping,
         "kept_excel_system_engineer": kept_excel_system_engineer,
+        "create_dates": sorted(create_dates),
         "seconds": seconds,
     }
+
+
+def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000) -> dict:
+    """Import a standard ERP workbook into MySQL."""
+    logger.info("打开文件: %s", file_path)
+    wb = load_workbook(file_path, read_only=True, data_only=True)
+    try:
+        ws = find_standard_sheet(wb)
+        headers = _header_labels(ws)
+
+        def excel_rows() -> Iterable[dict[str, object]]:
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                yield dict(zip(headers, row, strict=True))
+
+        return _import_erp_records(config, excel_rows(), file_path.name, batch_size)
+    finally:
+        wb.close()
+
+
+def import_erp_dataframe(config: MySQLConfig, dataframe, batch_size: int = 5000) -> dict:
+    """Import an in-memory standard ERP dataframe without writing Sheet1."""
+    headers = standard_headers()
+    if dataframe.columns.tolist() != headers:
+        raise ValueError("内存 ERP 数据必须使用完整且有序的 78 列标准字段。")
+
+    def dataframe_rows() -> Iterable[dict[str, object]]:
+        for row in dataframe.itertuples(index=False, name=None):
+            yield dict(zip(headers, row, strict=True))
+
+    return _import_erp_records(config, dataframe_rows(), "<memory>", batch_size)
 
 
 def main():

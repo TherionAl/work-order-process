@@ -1,54 +1,42 @@
-# ERP 标准 Sheet1 与分摊字段说明
+# ERP 合并、入库与文档导出
 
-## 输入和输出
+ERP 合并读取新 ERP、旧 ERP 和字段对照文件。字段映射、数据清洗、营销平台处理、体系工程师匹配、年度分摊和重复业务键去重均在代码中完成，不需要先生成 Sheet1 再读回。
 
-ERP 合并需要三份输入文件：新 ERP Excel、旧 ERP Excel 和字段对照 Excel。命令会先生成可导入的标准 Sheet1；可选的文档版用于阅读和核对，不能作为导入文件。
+默认数据流为：
+
+`新旧 ERP 源文件 -> 代码处理 -> erp_data 快照 -> 文档版 xlsx`
+
+文档版始终从本次写入的 `erp_data` 快照导出，因此与数据库内容一致。
 
 ```powershell
 uv run --group erp erp-merge `
   --input-new .\input\new_erp.xlsx `
   --input-old .\input\old_erp.xlsx `
   --config .\input\字段对照.xlsx `
-  --output .\output\erp_standard.xlsx `
   --document-output .\output\erp_document.xlsx
 ```
 
-`--output` 生成的工作簿只有 `Sheet1`，是唯一可导入的标准数据文件。`--document-output` 生成的工作簿包含 `说明` 和 `文档数据`，用于业务阅读。
-
-## 运行环境
-
-ERP 合并依赖 `pandas` 和 `numpy`，它们位于独立的 `erp` 依赖组中。执行 ERP 合并或 ERP 相关测试时必须添加 `--group erp`。日常工单调度服务不需要该组，服务器可使用 `uv sync --no-default-groups` 同步核心依赖后运行 `daily_runner`，避免在旧系统上构建 ERP 分析依赖。
-
-## 78 列标准和 69 列兼容
-
-当前标准 Sheet1 固定为 78 列：原有 69 列加上 9 个年度分摊字段。导入程序仍兼容历史 69 列标准文件；历史文件没有的 9 个分摊字段会按空值处理。
-
-文档版的 `文档数据` 在 78 列标准字段之前额外增加 `文档类别` 列，因此共有 79 列。它不满足标准 Sheet1 的完整列头契约，导入程序会明确拒绝该文件，避免误把阅读文件导入。
-
-## 分摊字段口径
-
-`当年应分摊金额`（`cur_year_amort`）和 `去年同期应分摊金额`（`prev_year_amort`）分别保留原 ERP 的 BQ、BR 原始值。它们不等同于本程序计算出的年度分摊结果，也不会被计算结果覆盖。
-
-新增的计算字段包括合同天数、去年/今年统计起止日期、去年/今年按期分摊服务费和倒签调整后分摊服务费。计算时服务期与统计区间取交集，起始日和结束日都计入：
-
-```text
-overlap_days = max(0, min(服务结束日, 统计结束日) - max(服务开始日, 统计开始日) + 1)
-分摊金额 = 产品金额 * overlap_days / 合同天数
-```
-
-其中合同天数同样按首尾两日均计入计算。
-
-## 导入边界
-
-不带 `--import` 时，命令只生成 Excel 文件，不会连接或写入 MySQL。即使同时指定 `--document-output`，也仍是生成模式。
-
-只有明确传入 `--import` 时，才会将 `--output` 指定的标准 Sheet1 导入 MySQL；文档版始终不会导入。
+如需人工核对中间标准数据，可额外指定 `--standard-output`：
 
 ```powershell
 uv run --group erp erp-merge `
   --input-new .\input\new_erp.xlsx `
   --input-old .\input\old_erp.xlsx `
   --config .\input\字段对照.xlsx `
-  --output .\output\erp_standard.xlsx `
-  --import
+  --standard-output .\output\erp_standard.xlsx `
+  --document-output .\output\erp_document.xlsx
 ```
+
+`--standard-output` 不参与入库，仅输出用于核对的 78 列标准 Sheet1。文档版只包含 `文档数据` 工作表，不能作为 ERP 导入源。
+
+## 分摊字段
+
+`cur_year_amort` 与 `prev_year_amort` 保留原 ERP 的 BQ、BR 原始分摊值。以下字段由代码按服务期与统计区间的重叠天数计算，起始日和结束日均计入：
+
+- `contract_days`：合同天数。
+- `prev_year_calc_amort`：去年按期分摊服务费。
+- `prev_year_adjusted_amort`：去年倒签调整后分摊服务费。
+- `cur_year_calc_amort`：今年按期分摊服务费。
+- `cur_year_adjusted_amort`：今年倒签调整后分摊服务费。
+
+生成标准数据时，完整业务键 `合同编号 + 标的行编码 + 执行明细id` 的重复行会在计算前按最后一条记录去重，与 `erp_data` 的快照唯一键行为保持一致。

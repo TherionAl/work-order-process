@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import Iterable
 
 from ..config import load_settings
-from ..erp_import import import_erp_xlsx
+from ..erp_document_export import export_erp_snapshot_document
+from ..erp_import import import_erp_dataframe
 from .config import load_config
 from .pipeline import (
     build_standard_sheet,
     merge_erp_sources,
-    write_document_workbook,
     write_standard_sheet,
 )
 
@@ -26,13 +26,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--config", type=Path, required=True, help="新旧 ERP 字段对照 Excel 路径")
     parser.add_argument("--input-new", type=Path, required=True, help="新 ERP 源 Excel 路径")
     parser.add_argument("--input-old", type=Path, required=True, help="旧 ERP 源 Excel 路径")
-    parser.add_argument("--output", type=Path, required=True, help="标准 Sheet1 输出 Excel 路径")
+    parser.add_argument("--standard-output", type=Path, help="可选的标准 Sheet1 核对文件路径")
     parser.add_argument("--last-year-start", help="去年统计起始日期，支持YYYY-MM-DD或YYYYMMDD格式")
     parser.add_argument("--last-year-end", help="去年统计截止日期，支持YYYY-MM-DD或YYYYMMDD格式")
     parser.add_argument("--current-year-start", help="今年统计起始日期，支持YYYY-MM-DD或YYYYMMDD格式")
     parser.add_argument("--current-year-end", help="今年统计截止日期，支持YYYY-MM-DD或YYYYMMDD格式")
-    parser.add_argument("--import", dest="import_to_db", action="store_true", help="将生成的标准 Sheet1 导入 MySQL")
-    parser.add_argument("--document-output", type=Path, help="可读文档版 Excel 输出路径（不可导入）")
+    parser.add_argument("--document-output", type=Path, required=True, help="数据库快照文档版 Excel 输出路径（不可导入）")
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -45,21 +44,21 @@ def setup_logging() -> None:
     )
 
 
-def validate_output_paths(output: Path, document_output: Path | None) -> None:
-    if document_output is None:
+def validate_output_paths(standard_output: Path | None, document_output: Path) -> None:
+    if standard_output is None:
         return
-    resolved_output = os.path.normcase(str(output.resolve()))
+    resolved_output = os.path.normcase(str(standard_output.resolve()))
     resolved_document_output = os.path.normcase(str(document_output.resolve()))
     if resolved_output == resolved_document_output:
         raise ValueError(
-            "--document-output and --output must resolve to different paths"
+            "--document-output and --standard-output must resolve to different paths"
         )
 
 
 def main(argv: Iterable[str] | None = None) -> None:
     setup_logging()
     args = parse_args(argv)
-    validate_output_paths(args.output, args.document_output)
+    validate_output_paths(args.standard_output, args.document_output)
     config = load_config()
     date_range = config["统计日期区间"]
     previous_period = (
@@ -75,15 +74,21 @@ def main(argv: Iterable[str] | None = None) -> None:
 
     merged = merge_erp_sources(args.input_new, args.input_old, args.config, datetime.now())
     standard = build_standard_sheet(merged, previous_period, current_period)
-    write_standard_sheet(standard, args.output)
-    logger.info("已生成标准 Sheet1：%s（%d 行）", args.output, len(standard))
-    if args.document_output:
-        write_document_workbook(standard, args.document_output)
-        logger.info("已生成不可导入的 ERP 文档版：%s", args.document_output)
+    if args.standard_output:
+        write_standard_sheet(standard, args.standard_output)
+        logger.info("已生成标准 Sheet1 核对文件：%s（%d 行）", args.standard_output, len(standard))
 
-    if args.import_to_db:
-        result = import_erp_xlsx(load_settings().mysql, args.output)
-        logger.info("ERP 导入完成：%s", result)
+    mysql_config = load_settings().mysql
+    result = import_erp_dataframe(mysql_config, standard)
+    create_dates = result["create_dates"]
+    if len(create_dates) != 1:
+        raise ValueError(f"本次 ERP 入库未产生唯一快照日期：{create_dates}")
+    logger.info("ERP 导入完成：%s", result)
+
+    document_result = export_erp_snapshot_document(
+        mysql_config, create_dates[0], args.document_output
+    )
+    logger.info("已从数据库快照导出 ERP 文档版：%s", document_result)
 
 
 if __name__ == "__main__":

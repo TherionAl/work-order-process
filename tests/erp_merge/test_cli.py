@@ -27,7 +27,7 @@ def test_cli_help():
 def test_standalone_script_help():
     """测试独立脚本可以正常调用并输出帮助信息"""
     result = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "merge_erp_data_20260715.py"), "--help"],
+        [sys.executable, str(REPO_ROOT / "merge_erp_data.py"), "--help"],
         capture_output=True,
         encoding="utf-8",
         errors="replace",
@@ -37,12 +37,15 @@ def test_standalone_script_help():
     assert "ERP" in result.stdout
 
 
-@pytest.mark.parametrize("should_import", [False, True], ids=["generate-only", "with-import"])
-def test_cli_import_is_explicit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, should_import: bool) -> None:
+@pytest.mark.parametrize("write_standard", [False, True], ids=["database-only", "with-standard-output"])
+def test_cli_imports_dataframe_then_exports_database_snapshot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_standard: bool
+) -> None:
     events: list[tuple[str, object]] = []
     merged = object()
     standard: list[object] = []
-    output = tmp_path / "standard.xlsx"
+    standard_output = tmp_path / "standard.xlsx"
+    document_output = tmp_path / "document.xlsx"
     periods = {
         "统计日期区间": {
             "去年起始": "2025-01-01",
@@ -68,8 +71,7 @@ def test_cli_import_is_explicit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     )
     monkeypatch.setattr(
         cli,
-        "write_standard_sheet",
-        lambda value, path: events.append(("write", (value, path))),
+        "write_standard_sheet", lambda value, path: events.append(("standard", (value, path)))
     )
     monkeypatch.setattr(
         cli,
@@ -78,67 +80,15 @@ def test_cli_import_is_explicit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     )
     monkeypatch.setattr(
         cli,
-        "import_erp_xlsx",
-        lambda config, path: events.append(("import", (config, path))),
-    )
-
-    argv = [
-        "--input-new",
-        str(tmp_path / "new.xlsx"),
-        "--input-old",
-        str(tmp_path / "old.xlsx"),
-        "--config",
-        str(tmp_path / "rules.xlsx"),
-        "--output",
-        str(output),
-    ]
-    if should_import:
-        argv.append("--import")
-
-    cli.main(argv)
-
-    assert events[:3] == [
-        ("merge", (tmp_path / "new.xlsx", tmp_path / "old.xlsx", tmp_path / "rules.xlsx")),
-        ("build", (merged, ("2025-01-01", "2025-12-31"), ("2026-01-01", "2026-12-31"))),
-        ("write", (standard, output)),
-    ]
-    assert [event for event in events if event[0] == "import"] == (
-        [("import", ("mysql-config", output))] if should_import else []
-    )
-
-
-@pytest.mark.parametrize(
-    "has_document_output", [False, True], ids=["without-document", "with-document"]
-)
-def test_cli_document_output_is_optional_and_does_not_import(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, has_document_output: bool
-) -> None:
-    events: list[tuple[str, object]] = []
-    standard: list[object] = []
-    output = tmp_path / "standard.xlsx"
-    document_output = tmp_path / "document.xlsx"
-    periods = {
-        "统计日期区间": {
-            "去年起始": "2025-01-01",
-            "去年截止": "2025-12-31",
-            "今年起始": "2026-01-01",
-            "今年截止": "2026-12-31",
-        }
-    }
-
-    monkeypatch.setattr(cli, "load_config", lambda: periods)
-    monkeypatch.setattr(cli, "merge_erp_sources", lambda *args: object())
-    monkeypatch.setattr(cli, "build_standard_sheet", lambda *args: standard)
-    monkeypatch.setattr(
-        cli, "write_standard_sheet", lambda value, path: events.append(("standard", path))
+        "import_erp_dataframe",
+        lambda config, value: events.append(("import", (config, value)))
+        or {"create_dates": ["20260717"]},
     )
     monkeypatch.setattr(
         cli,
-        "write_document_workbook",
-        lambda value, path: events.append(("document", path)),
-        raising=False,
+        "export_erp_snapshot_document",
+        lambda config, create_date, path: events.append(("document", (config, create_date, path))),
     )
-    monkeypatch.setattr(cli, "import_erp_xlsx", lambda *args: events.append(("import", args)))
 
     argv = [
         "--input-new",
@@ -147,33 +97,42 @@ def test_cli_document_output_is_optional_and_does_not_import(
         str(tmp_path / "old.xlsx"),
         "--config",
         str(tmp_path / "rules.xlsx"),
-        "--output",
-        str(output),
+        "--document-output",
+        str(document_output),
     ]
-    if has_document_output:
-        argv.extend(["--document-output", str(document_output)])
+    if write_standard:
+        argv.extend(["--standard-output", str(standard_output)])
 
     cli.main(argv)
 
-    expected = [("standard", output)]
-    if has_document_output:
-        expected.append(("document", document_output))
+    expected = [
+        ("merge", (tmp_path / "new.xlsx", tmp_path / "old.xlsx", tmp_path / "rules.xlsx")),
+        ("build", (merged, ("2025-01-01", "2025-12-31"), ("2026-01-01", "2026-12-31"))),
+    ]
+    if write_standard:
+        expected.append(("standard", (standard, standard_output)))
+    expected.extend(
+        [
+            ("import", ("mysql-config", standard)),
+            ("document", ("mysql-config", "20260717", document_output)),
+        ]
+    )
     assert events == expected
 
 
-def test_cli_rejects_document_output_matching_output_before_processing(
+def test_cli_rejects_document_output_matching_standard_output_before_processing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     events: list[str] = []
-    output = tmp_path / "nested" / ".." / "standard.xlsx"
+    output = tmp_path / "nested" / ".." / "document.xlsx"
 
     monkeypatch.setattr(cli, "load_config", lambda: events.append("config"))
     monkeypatch.setattr(cli, "merge_erp_sources", lambda *args: events.append("merge"))
     monkeypatch.setattr(cli, "write_standard_sheet", lambda *args: events.append("standard"))
-    monkeypatch.setattr(cli, "write_document_workbook", lambda *args: events.append("document"))
-    monkeypatch.setattr(cli, "import_erp_xlsx", lambda *args: events.append("import"))
+    monkeypatch.setattr(cli, "import_erp_dataframe", lambda *args: events.append("import"))
+    monkeypatch.setattr(cli, "export_erp_snapshot_document", lambda *args: events.append("document"))
 
-    with pytest.raises(ValueError, match="document-output.*output.*different paths"):
+    with pytest.raises(ValueError, match="document-output.*standard-output.*different paths"):
         cli.main(
             [
                 "--input-new",
@@ -182,11 +141,10 @@ def test_cli_rejects_document_output_matching_output_before_processing(
                 str(tmp_path / "old.xlsx"),
                 "--config",
                 str(tmp_path / "rules.xlsx"),
-                "--output",
-                str(tmp_path / "standard.xlsx"),
                 "--document-output",
                 str(output),
-                "--import",
+                "--standard-output",
+                str(tmp_path / "document.xlsx"),
             ]
         )
 

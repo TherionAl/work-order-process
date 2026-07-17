@@ -107,23 +107,25 @@ UPSERT_SQL = (
     )
 )
 
-_ELIGIBLE_CONTRACT = """
+_BASE_ELIGIBLE_CONTRACT = """
     is_public_cloud = '否'
-    AND is_estimated_ops = '否'
     AND contract_category = '运维合同'
     AND other_business_type = '非税票据'
     AND invalid_contract_type = '有效'
 """
 
+_NO_ESTIMATE_ELIGIBLE_CONTRACT = _BASE_ELIGIBLE_CONTRACT + " AND is_estimated_ops = '否'"
+
 _METRIC_SQL = f"""
 SELECT
     sales_platform,
-    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} THEN COALESCE(cur_year_revenue, 0) ELSE 0 END), 0) AS recognized_revenue,
-    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} THEN COALESCE(prev_year_revenue, 0) ELSE 0 END), 0) AS prior_year_recognized_revenue,
-    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date < %s THEN COALESCE(cur_year_adjusted_amort, 0) ELSE 0 END), 0) AS contracts_on_hand_amount,
-    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date < %s THEN COALESCE(prev_year_adjusted_amort, 0) ELSE 0 END), 0) AS prior_year_contracts_on_hand_amount,
-    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date >= %s AND contract_apply_date < %s THEN COALESCE(product_amount, 0) ELSE 0 END), 0) AS signing_completed_amount,
-    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date >= %s AND contract_apply_date < %s THEN COALESCE(product_amount, 0) ELSE 0 END), 0) AS prior_year_signing_amount
+    ROUND(SUM(CASE WHEN {_BASE_ELIGIBLE_CONTRACT} THEN COALESCE(cur_year_revenue, 0) ELSE 0 END), 0) AS recognized_revenue,
+    ROUND(SUM(CASE WHEN {_NO_ESTIMATE_ELIGIBLE_CONTRACT} THEN COALESCE(cur_year_revenue, 0) ELSE 0 END), 0) AS recognized_revenue_excluding_estimate,
+    ROUND(SUM(CASE WHEN {_NO_ESTIMATE_ELIGIBLE_CONTRACT} THEN COALESCE(prev_year_revenue, 0) ELSE 0 END), 0) AS prior_year_recognized_revenue,
+    ROUND(SUM(CASE WHEN {_NO_ESTIMATE_ELIGIBLE_CONTRACT} AND contract_apply_date < %s THEN COALESCE(cur_year_adjusted_amort, 0) ELSE 0 END), 0) AS contracts_on_hand_amount,
+    ROUND(SUM(CASE WHEN {_NO_ESTIMATE_ELIGIBLE_CONTRACT} AND contract_apply_date < %s THEN COALESCE(prev_year_adjusted_amort, 0) ELSE 0 END), 0) AS prior_year_contracts_on_hand_amount,
+    ROUND(SUM(CASE WHEN {_NO_ESTIMATE_ELIGIBLE_CONTRACT} AND contract_apply_date >= %s AND contract_apply_date < %s THEN COALESCE(product_amount, 0) ELSE 0 END), 0) AS signing_completed_amount,
+    ROUND(SUM(CASE WHEN {_NO_ESTIMATE_ELIGIBLE_CONTRACT} AND contract_apply_date >= %s AND contract_apply_date < %s THEN COALESCE(product_amount, 0) ELSE 0 END), 0) AS prior_year_signing_amount
 FROM erp_data
 WHERE create_date = %s
   AND sales_platform IS NOT NULL
@@ -329,6 +331,7 @@ def fetch_revenue_metrics(
     )
     fields = (
         "recognized_revenue",
+        "recognized_revenue_excluding_estimate",
         "prior_year_recognized_revenue",
         "contracts_on_hand_amount",
         "prior_year_contracts_on_hand_amount",
@@ -361,8 +364,9 @@ def generate_revenue_summary(
     output_dir: Path,
     erp_create_date: str | None = None,
     output_path: Path | None = None,
+    persist: bool = True,
 ) -> dict[str, object]:
-    """Load fixed targets, aggregate ERP data, upsert the monthly table, and export Excel."""
+    """Load fixed targets, aggregate ERP data, optionally upsert the monthly table, and export Excel."""
 
     import pymysql
 
@@ -370,7 +374,8 @@ def generate_revenue_summary(
         raise ValueError("统计月必须在 1 至 12 之间。")
 
     targets = load_revenue_targets(target_file, year, month)
-    ensure_revenue_summary_schema(config)
+    if persist:
+        ensure_revenue_summary_schema(config)
     with pymysql.connect(
         host=config.host,
         port=config.port,
@@ -400,8 +405,10 @@ def generate_revenue_summary(
                 targets=targets,
                 metrics=metrics,
             )
-            save_revenue_rows(cursor, rows)
-        connection.commit()
+            if persist:
+                save_revenue_rows(cursor, rows)
+        if persist:
+            connection.commit()
 
     export_path = output_path or output_dir / "revenue_summary" / f"运维服务营收数据表_{year}{month:02d}.xlsx"
     export_revenue_workbook(export_path, rows)
@@ -413,6 +420,7 @@ def generate_revenue_summary(
         "metric_platform_count": len(metrics),
         "rows": len(rows),
         "unmapped_metric_platforms": sorted(set(metrics) - set(targets)),
+        "persisted": persist,
         "output_path": str(export_path),
     }
 
