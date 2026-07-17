@@ -6,6 +6,8 @@ from openpyxl import Workbook, load_workbook
 
 from work_order_process.revenue_summary import (
     ENGLISH_HEADERS,
+    PERSISTED_COLUMNS,
+    _METRIC_SQL,
     build_revenue_rows,
     export_revenue_workbook,
     fetch_revenue_metrics,
@@ -215,3 +217,20 @@ def test_cli_generates_revenue_summary_with_explicit_period_and_snapshot(monkeyp
     assert captured["year"] == 2026
     assert captured["month"] == 6
     assert captured["erp_create_date"] == "20260717"
+
+
+def test_revenue_schema_places_erp_snapshot_before_audit_columns_and_rounds_amounts() -> None:
+    schema = (Path(__file__).resolve().parents[1] / "sql" / "ops_service_revenue_monthly.sql").read_text(encoding="utf-8")
+
+    assert PERSISTED_COLUMNS[-1] == "erp_create_date"
+    assert schema.index("signing_yoy_rate") < schema.index("erp_create_date") < schema.index("created_at")
+    assert "ROUND(SUM(CASE" in _METRIC_SQL
+
+
+def test_revenue_total_view_has_dynamic_total_row_and_sort_order() -> None:
+    view_sql = (Path(__file__).resolve().parents[1] / "sql" / "v_ops_service_revenue_monthly_with_total.sql").read_text(encoding="utf-8")
+
+    assert "UNION ALL" in view_sql
+    assert "'合计' AS sales_platform" in view_sql
+    assert "0 AS sort_order" in view_sql
+    assert "ROUND(SUM(revenue_target), 2)" in view_sql

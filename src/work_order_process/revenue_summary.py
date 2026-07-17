@@ -76,11 +76,8 @@ RATE_COLUMNS = {
 }
 
 PERSISTED_COLUMNS = (
-    "stat_year",
-    "stat_month",
-    "sales_platform",
+    *ENGLISH_HEADERS,
     "erp_create_date",
-    *ENGLISH_HEADERS[3:],
 )
 
 UPSERT_SQL = (
@@ -107,12 +104,12 @@ _ELIGIBLE_CONTRACT = """
 _METRIC_SQL = f"""
 SELECT
     sales_platform,
-    COALESCE(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} THEN COALESCE(cur_year_revenue, 0) ELSE 0 END), 0) AS recognized_revenue,
-    COALESCE(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} THEN COALESCE(prev_year_revenue, 0) ELSE 0 END), 0) AS prior_year_recognized_revenue,
-    COALESCE(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date < %s THEN COALESCE(cur_year_adjusted_amort, 0) ELSE 0 END), 0) AS contracts_on_hand_amount,
-    COALESCE(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date < %s THEN COALESCE(prev_year_adjusted_amort, 0) ELSE 0 END), 0) AS prior_year_contracts_on_hand_amount,
-    COALESCE(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date >= %s AND contract_apply_date < %s THEN COALESCE(product_amount, 0) ELSE 0 END), 0) AS signing_completed_amount,
-    COALESCE(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date >= %s AND contract_apply_date < %s THEN COALESCE(product_amount, 0) ELSE 0 END), 0) AS prior_year_signing_amount
+    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} THEN COALESCE(cur_year_revenue, 0) ELSE 0 END), 2) AS recognized_revenue,
+    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} THEN COALESCE(prev_year_revenue, 0) ELSE 0 END), 2) AS prior_year_recognized_revenue,
+    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date < %s THEN COALESCE(cur_year_adjusted_amort, 0) ELSE 0 END), 2) AS contracts_on_hand_amount,
+    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date < %s THEN COALESCE(prev_year_adjusted_amort, 0) ELSE 0 END), 2) AS prior_year_contracts_on_hand_amount,
+    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date >= %s AND contract_apply_date < %s THEN COALESCE(product_amount, 0) ELSE 0 END), 2) AS signing_completed_amount,
+    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date >= %s AND contract_apply_date < %s THEN COALESCE(product_amount, 0) ELSE 0 END), 2) AS prior_year_signing_amount
 FROM erp_data
 WHERE create_date = %s
   AND sales_platform IS NOT NULL
@@ -247,7 +244,8 @@ def ensure_revenue_summary_schema(config: MySQLConfig) -> None:
 
     import pymysql
 
-    statement = (PROJECT_ROOT / "sql" / "ops_service_revenue_monthly.sql").read_text(encoding="utf-8")
+    table_statement = (PROJECT_ROOT / "sql" / "ops_service_revenue_monthly.sql").read_text(encoding="utf-8")
+    view_statement = (PROJECT_ROOT / "sql" / "v_ops_service_revenue_monthly_with_total.sql").read_text(encoding="utf-8")
     with pymysql.connect(
         host=config.host,
         port=config.port,
@@ -258,7 +256,16 @@ def ensure_revenue_summary_schema(config: MySQLConfig) -> None:
         autocommit=True,
     ) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(statement)
+            cursor.execute(table_statement)
+            cursor.execute("SHOW COLUMNS FROM ops_service_revenue_monthly")
+            column_names = [row[0] for row in cursor.fetchall()]
+            if column_names[-3:] != ["erp_create_date", "created_at", "updated_at"]:
+                cursor.execute(
+                    "ALTER TABLE ops_service_revenue_monthly "
+                    "MODIFY COLUMN erp_create_date VARCHAR(8) NOT NULL COMMENT 'ERP快照日期' "
+                    "AFTER signing_yoy_rate"
+                )
+            cursor.execute(view_statement)
 
 
 def fetch_revenue_metrics(

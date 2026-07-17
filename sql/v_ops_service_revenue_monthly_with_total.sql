@@ -1,0 +1,51 @@
+CREATE OR REPLACE VIEW v_ops_service_revenue_monthly_with_total AS
+SELECT
+  stat_year,
+  stat_month,
+  sales_platform,
+  revenue_target,
+  recognized_revenue,
+  revenue_completion_rate,
+  contracts_on_hand_amount,
+  prior_year_contracts_on_hand_amount,
+  contracts_on_hand_yoy_amount,
+  contracts_on_hand_yoy_rate,
+  recognized_revenue_excluding_estimate,
+  prior_year_recognized_revenue,
+  recognized_revenue_yoy_amount,
+  recognized_revenue_yoy_rate,
+  signing_completed_amount,
+  prior_year_signing_amount,
+  signing_yoy_amount,
+  signing_yoy_rate,
+  erp_create_date,
+  created_at,
+  updated_at,
+  1 AS sort_order
+FROM ops_service_revenue_monthly
+UNION ALL
+SELECT
+  stat_year,
+  stat_month,
+  '合计' AS sales_platform,
+  ROUND(SUM(revenue_target), 2) AS revenue_target,
+  ROUND(SUM(recognized_revenue), 2) AS recognized_revenue,
+  CASE WHEN SUM(revenue_target) = 0 THEN NULL ELSE ROUND(SUM(recognized_revenue) / SUM(revenue_target), 6) END AS revenue_completion_rate,
+  ROUND(SUM(contracts_on_hand_amount), 2) AS contracts_on_hand_amount,
+  ROUND(SUM(prior_year_contracts_on_hand_amount), 2) AS prior_year_contracts_on_hand_amount,
+  ROUND(SUM(contracts_on_hand_yoy_amount), 2) AS contracts_on_hand_yoy_amount,
+  CASE WHEN SUM(prior_year_contracts_on_hand_amount) = 0 THEN NULL ELSE ROUND(SUM(contracts_on_hand_amount) / SUM(prior_year_contracts_on_hand_amount) - 1, 6) END AS contracts_on_hand_yoy_rate,
+  ROUND(SUM(recognized_revenue_excluding_estimate), 2) AS recognized_revenue_excluding_estimate,
+  ROUND(SUM(prior_year_recognized_revenue), 2) AS prior_year_recognized_revenue,
+  ROUND(SUM(recognized_revenue_yoy_amount), 2) AS recognized_revenue_yoy_amount,
+  CASE WHEN SUM(prior_year_recognized_revenue) = 0 THEN NULL ELSE ROUND(SUM(recognized_revenue_excluding_estimate) / SUM(prior_year_recognized_revenue) - 1, 6) END AS recognized_revenue_yoy_rate,
+  ROUND(SUM(signing_completed_amount), 2) AS signing_completed_amount,
+  ROUND(SUM(prior_year_signing_amount), 2) AS prior_year_signing_amount,
+  ROUND(SUM(signing_yoy_amount), 2) AS signing_yoy_amount,
+  CASE WHEN SUM(prior_year_signing_amount) = 0 THEN NULL ELSE ROUND(SUM(signing_completed_amount) / SUM(prior_year_signing_amount) - 1, 6) END AS signing_yoy_rate,
+  MAX(erp_create_date) AS erp_create_date,
+  MIN(created_at) AS created_at,
+  MAX(updated_at) AS updated_at,
+  0 AS sort_order
+FROM ops_service_revenue_monthly
+GROUP BY stat_year, stat_month;
