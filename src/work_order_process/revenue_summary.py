@@ -75,6 +75,20 @@ RATE_COLUMNS = {
     "signing_yoy_rate",
 }
 
+MONEY_COLUMN_COMMENTS = {
+    "revenue_target": "收入目标值（元）",
+    "recognized_revenue": "确收完成值（元）",
+    "contracts_on_hand_amount": "在手合同额（元）",
+    "prior_year_contracts_on_hand_amount": "去年同期在手合同额（元）",
+    "contracts_on_hand_yoy_amount": "在手合同同比增长值（元）",
+    "recognized_revenue_excluding_estimate": "不含暂估确收值（元）",
+    "prior_year_recognized_revenue": "去年同期确收值（元）",
+    "recognized_revenue_yoy_amount": "确收同比增长值（元）",
+    "signing_completed_amount": "签约完成值（元）",
+    "prior_year_signing_amount": "去年同期签约值（元）",
+    "signing_yoy_amount": "签约同比增长值（元）",
+}
+
 PERSISTED_COLUMNS = (
     *ENGLISH_HEADERS,
     "erp_create_date",
@@ -104,12 +118,12 @@ _ELIGIBLE_CONTRACT = """
 _METRIC_SQL = f"""
 SELECT
     sales_platform,
-    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} THEN COALESCE(cur_year_revenue, 0) ELSE 0 END), 2) AS recognized_revenue,
-    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} THEN COALESCE(prev_year_revenue, 0) ELSE 0 END), 2) AS prior_year_recognized_revenue,
-    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date < %s THEN COALESCE(cur_year_adjusted_amort, 0) ELSE 0 END), 2) AS contracts_on_hand_amount,
-    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date < %s THEN COALESCE(prev_year_adjusted_amort, 0) ELSE 0 END), 2) AS prior_year_contracts_on_hand_amount,
-    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date >= %s AND contract_apply_date < %s THEN COALESCE(product_amount, 0) ELSE 0 END), 2) AS signing_completed_amount,
-    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date >= %s AND contract_apply_date < %s THEN COALESCE(product_amount, 0) ELSE 0 END), 2) AS prior_year_signing_amount
+    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} THEN COALESCE(cur_year_revenue, 0) ELSE 0 END), 0) AS recognized_revenue,
+    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} THEN COALESCE(prev_year_revenue, 0) ELSE 0 END), 0) AS prior_year_recognized_revenue,
+    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date < %s THEN COALESCE(cur_year_adjusted_amort, 0) ELSE 0 END), 0) AS contracts_on_hand_amount,
+    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date < %s THEN COALESCE(prev_year_adjusted_amort, 0) ELSE 0 END), 0) AS prior_year_contracts_on_hand_amount,
+    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date >= %s AND contract_apply_date < %s THEN COALESCE(product_amount, 0) ELSE 0 END), 0) AS signing_completed_amount,
+    ROUND(SUM(CASE WHEN {_ELIGIBLE_CONTRACT} AND contract_apply_date >= %s AND contract_apply_date < %s THEN COALESCE(product_amount, 0) ELSE 0 END), 0) AS prior_year_signing_amount
 FROM erp_data
 WHERE create_date = %s
   AND sales_platform IS NOT NULL
@@ -231,7 +245,7 @@ def export_revenue_workbook(path: Path, rows: list[Mapping[str, Decimal | int | 
     for row in range(3, len(rows) + 4):
         for column_index, column_name in enumerate(ENGLISH_HEADERS, start=2):
             if column_name in AMOUNT_COLUMNS:
-                worksheet.cell(row, column_index).number_format = '#,##0.00'
+                worksheet.cell(row, column_index).number_format = '#,##0'
             elif column_name in RATE_COLUMNS:
                 worksheet.cell(row, column_index).number_format = '0.00%'
 
@@ -259,6 +273,26 @@ def ensure_revenue_summary_schema(config: MySQLConfig) -> None:
             cursor.execute(table_statement)
             cursor.execute("SHOW COLUMNS FROM ops_service_revenue_monthly")
             column_names = [row[0] for row in cursor.fetchall()]
+            cursor.execute(
+                "SELECT column_name, numeric_scale FROM information_schema.columns "
+                "WHERE table_schema = DATABASE() AND table_name = 'ops_service_revenue_monthly'"
+            )
+            scales = {row[0]: row[1] for row in cursor.fetchall()}
+            money_columns_to_migrate = [
+                column for column in MONEY_COLUMN_COMMENTS if scales.get(column) != 0
+            ]
+            if money_columns_to_migrate:
+                cursor.execute(
+                    "UPDATE ops_service_revenue_monthly SET "
+                    + ", ".join(f"{column} = ROUND({column}, 0)" for column in money_columns_to_migrate)
+                )
+                cursor.execute(
+                    "ALTER TABLE ops_service_revenue_monthly "
+                    + ", ".join(
+                        f"MODIFY COLUMN {column} DECIMAL(18,0) NOT NULL COMMENT '{MONEY_COLUMN_COMMENTS[column]}'"
+                        for column in money_columns_to_migrate
+                    )
+                )
             if column_names[-3:] != ["erp_create_date", "created_at", "updated_at"]:
                 cursor.execute(
                     "ALTER TABLE ops_service_revenue_monthly "
@@ -430,7 +464,7 @@ def _amount(value: Decimal | int | str | None) -> Decimal:
     if value is None:
         return Decimal("0.00")
     try:
-        return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     except (InvalidOperation, ValueError):
         return Decimal("0.00")
 

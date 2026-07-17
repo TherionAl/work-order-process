@@ -224,7 +224,9 @@ def test_revenue_schema_places_erp_snapshot_before_audit_columns_and_rounds_amou
 
     assert PERSISTED_COLUMNS[-1] == "erp_create_date"
     assert schema.index("signing_yoy_rate") < schema.index("erp_create_date") < schema.index("created_at")
+    assert "DECIMAL(18,0)" in schema
     assert "ROUND(SUM(CASE" in _METRIC_SQL
+    assert "END), 0) AS recognized_revenue" in _METRIC_SQL
 
 
 def test_revenue_total_view_has_dynamic_total_row_and_sort_order() -> None:
@@ -233,4 +235,33 @@ def test_revenue_total_view_has_dynamic_total_row_and_sort_order() -> None:
     assert "UNION ALL" in view_sql
     assert "'合计' AS sales_platform" in view_sql
     assert "0 AS sort_order" in view_sql
-    assert "ROUND(SUM(revenue_target), 2)" in view_sql
+    assert "ROUND(SUM(revenue_target), 0)" in view_sql
+
+
+def test_revenue_amounts_round_half_up_to_integer_and_export_without_decimals(tmp_path: Path) -> None:
+    rows = build_revenue_rows(
+        year=2026,
+        month=6,
+        erp_create_date="20260717",
+        targets={"厦门分公司": Decimal("100.5")},
+        metrics={
+            "厦门分公司": {
+                "recognized_revenue": Decimal("10.5"),
+                "prior_year_recognized_revenue": Decimal("0"),
+                "contracts_on_hand_amount": Decimal("20.5"),
+                "prior_year_contracts_on_hand_amount": Decimal("0"),
+                "signing_completed_amount": Decimal("30.5"),
+                "prior_year_signing_amount": Decimal("0"),
+            }
+        },
+    )
+    path = tmp_path / "revenue.xlsx"
+
+    export_revenue_workbook(path, rows)
+
+    workbook = load_workbook(path, data_only=False)
+    sheet = workbook.active
+    assert rows[0]["revenue_target"] == Decimal("101")
+    assert rows[0]["recognized_revenue"] == Decimal("11")
+    assert sheet.cell(4, 5).number_format == "#,##0"
+    workbook.close()
