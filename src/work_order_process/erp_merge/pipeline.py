@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
 from openpyxl import Workbook
+from openpyxl.cell import WriteOnlyCell
+from openpyxl.styles import Alignment, Font, PatternFill
 
 from work_order_process.erp_schema import standard_headers
 
 from .calculator import add_statistical_allocation_columns
 from .config import load_config
 from .mapping import (
+    DATE_FIELDS,
     MONEY_PATTERN,
     add_engineer_column,
     align_new_data,
@@ -32,6 +35,18 @@ SOURCE_COLUMN = "数据来源"
 GENERATED_AT_COLUMN = "文件生成时间戳"
 SOURCE_DATE_COLUMN = "文件来源时间戳"
 EXTRA_OLD_TEXT_COLUMNS = ["其他业务类型", "无效合同类型"]
+DOCUMENT_CATEGORY_HEADER = "文档类别"
+DOCUMENT_CATEGORY_VALUE = "文档行"
+DOCUMENT_SHEET_NAME = "文档数据"
+DOCUMENT_DATE_FIELDS = frozenset(
+    [
+        *DATE_FIELDS,
+        "去年统计起始日期",
+        "去年统计截止日期",
+        "今年统计起始日期",
+        "今年统计截止日期",
+    ]
+)
 
 
 def _clean_header(value: object) -> str:
@@ -224,4 +239,72 @@ def write_standard_sheet(df: pd.DataFrame, output_file: Path) -> None:
     sheet.append(headers)
     for row in df.itertuples(index=False, name=None):
         sheet.append([_excel_value(value) for value in row])
+    workbook.save(output_file)
+
+
+def _document_date_value(value: object) -> object:
+    excel_value = _excel_value(value)
+    if excel_value is None or isinstance(excel_value, (datetime, date)):
+        return excel_value
+    if not isinstance(excel_value, str) or not excel_value.strip():
+        return excel_value
+    parsed = pd.to_datetime(excel_value.strip(), errors="coerce")
+    return parsed.to_pydatetime() if not pd.isna(parsed) else excel_value
+
+
+def _document_header_cell(sheet, value: str) -> WriteOnlyCell:
+    cell = WriteOnlyCell(sheet, value=value)
+    cell.font = Font(bold=True, color="FFFFFF")
+    cell.fill = PatternFill("solid", fgColor="1F4E78")
+    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    return cell
+
+
+def _document_data_cell(sheet, header: str, value: object) -> WriteOnlyCell:
+    cell_value = (
+        _document_date_value(value)
+        if header in DOCUMENT_DATE_FIELDS
+        else _excel_value(value)
+    )
+    cell = WriteOnlyCell(sheet, value=cell_value)
+    if header in DOCUMENT_DATE_FIELDS and isinstance(cell.value, (datetime, date)):
+        cell.number_format = "yyyy-mm-dd"
+    return cell
+
+
+def write_document_workbook(df: pd.DataFrame, output_file: Path) -> None:
+    """Write a readable, non-importable ERP document workbook without copying the frame."""
+    headers = standard_headers()
+    if df.columns.tolist() != headers:
+        raise ValueError("文档工作簿仅接受列头及顺序均符合 78 列标准 Sheet1 的数据。")
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook(write_only=True)
+
+    instructions = workbook.create_sheet("说明")
+    instructions.freeze_panes = "A2"
+    instructions.append(["ERP 文档版使用说明"])
+    for text in [
+        "来源与用途：本文件由新旧 ERP 合并后的标准数据生成，供阅读、核对和业务沟通使用。",
+        "标准 Sheet1 固定为 78 列；只有标准 Sheet1 才是 ERP 导入数据源。",
+        "cur_year_amort 与 prev_year_amort 分别保留原 ERP 的 BQ、BR 原始值，和计算得到的年度分摊字段不同。",
+        "年度分摊按服务期与统计区间的重叠天数计算，起始日和结束日均计入。",
+        "本文档工作簿不能导入；文档数据表增加了文档类别列，导入程序会拒绝它。",
+        "只有显式提供 --import 时才会影响 MySQL；仅生成文件不会执行数据库导入。",
+    ]:
+        instructions.append([text])
+
+    sheet = workbook.create_sheet(DOCUMENT_SHEET_NAME)
+    sheet.freeze_panes = "A2"
+    sheet.append(
+        [_document_header_cell(sheet, header) for header in [DOCUMENT_CATEGORY_HEADER, *headers]]
+    )
+    for row in df.itertuples(index=False, name=None):
+        sheet.append(
+            [WriteOnlyCell(sheet, value=DOCUMENT_CATEGORY_VALUE)]
+            + [
+                _document_data_cell(sheet, header, value)
+                for header, value in zip(headers, row, strict=True)
+            ]
+        )
     workbook.save(output_file)

@@ -105,3 +105,57 @@ def test_cli_import_is_explicit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     assert [event for event in events if event[0] == "import"] == (
         [("import", ("mysql-config", output))] if should_import else []
     )
+
+
+@pytest.mark.parametrize(
+    "has_document_output", [False, True], ids=["without-document", "with-document"]
+)
+def test_cli_document_output_is_optional_and_does_not_import(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, has_document_output: bool
+) -> None:
+    events: list[tuple[str, object]] = []
+    standard: list[object] = []
+    output = tmp_path / "standard.xlsx"
+    document_output = tmp_path / "document.xlsx"
+    periods = {
+        "统计日期区间": {
+            "去年起始": "2025-01-01",
+            "去年截止": "2025-12-31",
+            "今年起始": "2026-01-01",
+            "今年截止": "2026-12-31",
+        }
+    }
+
+    monkeypatch.setattr(cli, "load_config", lambda: periods)
+    monkeypatch.setattr(cli, "merge_erp_sources", lambda *args: object())
+    monkeypatch.setattr(cli, "build_standard_sheet", lambda *args: standard)
+    monkeypatch.setattr(
+        cli, "write_standard_sheet", lambda value, path: events.append(("standard", path))
+    )
+    monkeypatch.setattr(
+        cli,
+        "write_document_workbook",
+        lambda value, path: events.append(("document", path)),
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "import_erp_xlsx", lambda *args: events.append(("import", args)))
+
+    argv = [
+        "--input-new",
+        str(tmp_path / "new.xlsx"),
+        "--input-old",
+        str(tmp_path / "old.xlsx"),
+        "--config",
+        str(tmp_path / "rules.xlsx"),
+        "--output",
+        str(output),
+    ]
+    if has_document_output:
+        argv.extend(["--document-output", str(document_output)])
+
+    cli.main(argv)
+
+    expected = [("standard", output)]
+    if has_document_output:
+        expected.append(("document", document_output))
+    assert events == expected

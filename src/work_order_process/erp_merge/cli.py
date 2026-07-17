@@ -9,7 +9,12 @@ from typing import Iterable
 from ..config import load_settings
 from ..erp_import import import_erp_xlsx
 from .config import load_config
-from .pipeline import build_standard_sheet, merge_erp_sources, write_standard_sheet
+from .pipeline import (
+    build_standard_sheet,
+    merge_erp_sources,
+    write_document_workbook,
+    write_standard_sheet,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +31,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--current-year-start", help="今年统计起始日期，支持YYYY-MM-DD或YYYYMMDD格式")
     parser.add_argument("--current-year-end", help="今年统计截止日期，支持YYYY-MM-DD或YYYYMMDD格式")
     parser.add_argument("--import", dest="import_to_db", action="store_true", help="将生成的标准 Sheet1 导入 MySQL")
-    parser.add_argument("--document-output", type=Path, help="预留的文档版 Excel 输出路径")
+    parser.add_argument("--document-output", type=Path, help="可读文档版 Excel 输出路径（不可导入）")
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -59,6 +64,9 @@ def main(argv: Iterable[str] | None = None) -> None:
     standard = build_standard_sheet(merged, previous_period, current_period)
     write_standard_sheet(standard, args.output)
     logger.info("已生成标准 Sheet1：%s（%d 行）", args.output, len(standard))
+    if args.document_output:
+        write_document_workbook(standard, args.document_output)
+        logger.info("已生成不可导入的 ERP 文档版：%s", args.document_output)
 
     if args.import_to_db:
         result = import_erp_xlsx(load_settings().mysql, args.output)
