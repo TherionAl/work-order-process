@@ -159,3 +159,35 @@ def test_cli_document_output_is_optional_and_does_not_import(
     if has_document_output:
         expected.append(("document", document_output))
     assert events == expected
+
+
+def test_cli_rejects_document_output_matching_output_before_processing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    events: list[str] = []
+    output = tmp_path / "nested" / ".." / "standard.xlsx"
+
+    monkeypatch.setattr(cli, "load_config", lambda: events.append("config"))
+    monkeypatch.setattr(cli, "merge_erp_sources", lambda *args: events.append("merge"))
+    monkeypatch.setattr(cli, "write_standard_sheet", lambda *args: events.append("standard"))
+    monkeypatch.setattr(cli, "write_document_workbook", lambda *args: events.append("document"))
+    monkeypatch.setattr(cli, "import_erp_xlsx", lambda *args: events.append("import"))
+
+    with pytest.raises(ValueError, match="document-output.*output.*different paths"):
+        cli.main(
+            [
+                "--input-new",
+                str(tmp_path / "new.xlsx"),
+                "--input-old",
+                str(tmp_path / "old.xlsx"),
+                "--config",
+                str(tmp_path / "rules.xlsx"),
+                "--output",
+                str(tmp_path / "standard.xlsx"),
+                "--document-output",
+                str(output),
+                "--import",
+            ]
+        )
+
+    assert events == []

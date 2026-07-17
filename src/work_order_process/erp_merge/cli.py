@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -44,9 +45,21 @@ def setup_logging() -> None:
     )
 
 
+def validate_output_paths(output: Path, document_output: Path | None) -> None:
+    if document_output is None:
+        return
+    resolved_output = os.path.normcase(str(output.resolve()))
+    resolved_document_output = os.path.normcase(str(document_output.resolve()))
+    if resolved_output == resolved_document_output:
+        raise ValueError(
+            "--document-output and --output must resolve to different paths"
+        )
+
+
 def main(argv: Iterable[str] | None = None) -> None:
     setup_logging()
     args = parse_args(argv)
+    validate_output_paths(args.output, args.document_output)
     config = load_config()
     date_range = config["统计日期区间"]
     previous_period = (
