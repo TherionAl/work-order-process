@@ -422,9 +422,7 @@ source = { editable = "." }
 dependencies = [
     { name = "apscheduler" },
     { name = "httpx" },
-    { name = "numpy" },
     { name = "openpyxl" },
-    { name = "pandas" },
     { name = "pydantic" },
     { name = "pymysql" },
     { name = "pypdf" },
@@ -438,14 +436,16 @@ dependencies = [
 dev = [
     { name = "pytest" },
 ]
+erp = [
+    { name = "numpy" },
+    { name = "pandas" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "apscheduler", specifier = ">=3.10.0" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "numpy", specifier = ">=1.26.0" },
     { name = "openpyxl", specifier = ">=3.1.5" },
-    { name = "pandas", specifier = ">=2.2.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pymysql", specifier = ">=1.1.2" },
     { name = "pypdf", specifier = ">=6.14.2" },
@@ -457,6 +457,10 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.1.1" }]
+erp = [
+    { name = "numpy", specifier = ">=1.26.0" },
+    { name = "pandas", specifier = ">=2.2.0" },
+]
 
 [[package]]
 name = "xlrd"
