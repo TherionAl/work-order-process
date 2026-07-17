@@ -4,6 +4,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from work_order_process.erp_merge import cli
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
@@ -31,3 +35,73 @@ def test_standalone_script_help():
     )
     assert result.returncode == 0
     assert "ERP" in result.stdout
+
+
+@pytest.mark.parametrize("should_import", [False, True], ids=["generate-only", "with-import"])
+def test_cli_import_is_explicit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, should_import: bool) -> None:
+    events: list[tuple[str, object]] = []
+    merged = object()
+    standard: list[object] = []
+    output = tmp_path / "standard.xlsx"
+    periods = {
+        "统计日期区间": {
+            "去年起始": "2025-01-01",
+            "去年截止": "2025-12-31",
+            "今年起始": "2026-01-01",
+            "今年截止": "2026-12-31",
+        }
+    }
+
+    monkeypatch.setattr(cli, "load_config", lambda: periods)
+    monkeypatch.setattr(
+        cli,
+        "merge_erp_sources",
+        lambda new, old, rules, generated_at: events.append(("merge", (new, old, rules))) or merged,
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_standard_sheet",
+        lambda value, previous_period, current_period: events.append(
+            ("build", (value, previous_period, current_period))
+        )
+        or standard,
+    )
+    monkeypatch.setattr(
+        cli,
+        "write_standard_sheet",
+        lambda value, path: events.append(("write", (value, path))),
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_settings",
+        lambda: type("Settings", (), {"mysql": "mysql-config"})(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "import_erp_xlsx",
+        lambda config, path: events.append(("import", (config, path))),
+    )
+
+    argv = [
+        "--input-new",
+        str(tmp_path / "new.xlsx"),
+        "--input-old",
+        str(tmp_path / "old.xlsx"),
+        "--config",
+        str(tmp_path / "rules.xlsx"),
+        "--output",
+        str(output),
+    ]
+    if should_import:
+        argv.append("--import")
+
+    cli.main(argv)
+
+    assert events[:3] == [
+        ("merge", (tmp_path / "new.xlsx", tmp_path / "old.xlsx", tmp_path / "rules.xlsx")),
+        ("build", (merged, ("2025-01-01", "2025-12-31"), ("2026-01-01", "2026-12-31"))),
+        ("write", (standard, output)),
+    ]
+    assert [event for event in events if event[0] == "import"] == (
+        [("import", ("mysql-config", output))] if should_import else []
+    )

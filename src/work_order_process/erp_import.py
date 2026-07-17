@@ -12,7 +12,12 @@ from openpyxl import load_workbook
 
 from .config import MySQLConfig
 from .auxiliary_schema import ensure_auxiliary_schema
-from .erp_schema import LEGACY_ERP_COLUMN_MAP
+from .erp_schema import (
+    LEGACY_ERP_COLUMN_MAP,
+    STANDARD_ERP_COLUMN_MAP,
+    legacy_headers,
+    standard_headers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,18 +56,19 @@ SYSTEM_ENGINEER_BY_SALES_PLATFORM = {
     "新疆分公司": "庄明霞",
 }
 
-# Excel 列名 → DB 列名（按顺序对应 Sheet1 的 66 列）
+# Backward-compatible public alias for the historical 69-column contract.
 COLUMN_MAP = LEGACY_ERP_COLUMN_MAP
+IMPORT_COLUMN_MAP = STANDARD_ERP_COLUMN_MAP
 
 INSERT_SQL = (
     "INSERT INTO erp_data ("
-    + ", ".join(col for _, col in COLUMN_MAP)
+    + ", ".join(col for _, col in IMPORT_COLUMN_MAP)
     + ") VALUES ("
-    + ", ".join(["%s"] * len(COLUMN_MAP))
+    + ", ".join(["%s"] * len(IMPORT_COLUMN_MAP))
     + ") ON DUPLICATE KEY UPDATE "
     + ", ".join(
         f"{col} = VALUES({col})"
-        for _, col in COLUMN_MAP
+        for _, col in IMPORT_COLUMN_MAP
         if col not in {"contract_id", "item_code", "exec_detail_id", "create_date"}
     )
 )
@@ -140,6 +146,15 @@ CONVERTERS = {
     "prev_year_revenue": _to_decimal,
     "cur_year_amort": _to_decimal,
     "prev_year_amort": _to_decimal,
+    "contract_days": _to_int,
+    "prev_year_period_start": _to_date,
+    "prev_year_period_end": _to_date,
+    "prev_year_calc_amort": _to_decimal,
+    "prev_year_adjusted_amort": _to_decimal,
+    "cur_year_period_start": _to_date,
+    "cur_year_period_end": _to_date,
+    "cur_year_calc_amort": _to_decimal,
+    "cur_year_adjusted_amort": _to_decimal,
 }
 
 
@@ -148,6 +163,44 @@ def convert(col_name: str, value) -> object:
     if fn:
         return fn(value)
     return _to_str(value)
+
+
+def _header_labels(worksheet: Any) -> list[str]:
+    first_row = next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), ())
+    return [str(value).strip() if value is not None else "" for value in first_row]
+
+
+def find_standard_sheet(workbook) -> Any:
+    """Return the only worksheet with exactly the legacy or standard headers.
+
+    The imported data sheet is identified by its complete first-row header set,
+    not its sheet name or its position in the workbook.
+    """
+    accepted_layouts = {frozenset(legacy_headers()), frozenset(standard_headers())}
+    matches: list[Any] = []
+    duplicate_sheet_names: list[str] = []
+
+    for worksheet in workbook.worksheets:
+        headers = _header_labels(worksheet)
+        if len(headers) != len(set(headers)):
+            duplicate_sheet_names.append(worksheet.title)
+            continue
+        if frozenset(headers) in accepted_layouts and len(headers) in {69, 78}:
+            matches.append(worksheet)
+
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ValueError("工作簿中存在多个符合 ERP 标准列头的工作表，无法确定导入目标。")
+    if duplicate_sheet_names:
+        raise ValueError(
+            "未找到 ERP 标准 Sheet1：工作表列头存在重复值（"
+            + ", ".join(duplicate_sheet_names)
+            + "）。"
+        )
+    raise ValueError(
+        "未找到 ERP 标准 Sheet1：首行必须恰好包含 69 列历史标准列头或 78 列标准列头。"
+    )
 
 
 SalesPlatformBaseline = dict[tuple[str, str | None, str | None], str | None]
@@ -221,12 +274,11 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
     import time
 
     ensure_auxiliary_schema(config)
-    file_ts = datetime.now().strftime("%Y%m%d%H%M%S")
     logger.info("打开文件: %s", file_path)
     wb = load_workbook(file_path, read_only=True, data_only=True)
-    ws = wb[wb.sheetnames[0]]
+    ws = find_standard_sheet(wb)
+    headers = _header_labels(ws)
 
-    headers: list[str] = []
     inserted = 0
     updated = 0
     unchanged = 0
@@ -235,6 +287,7 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
     new_sales_platform = 0
     applied_system_engineer_mapping = 0
     kept_excel_system_engineer = 0
+    data_rows = 0
     started = time.time()
 
     pymysql_mod = pymysql
@@ -256,17 +309,13 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
                 len(sales_platform_baseline),
                 BASELINE_SALES_PLATFORM_CREATE_DATE,
             )
-            for i, row in enumerate(ws.iter_rows(values_only=True)):
-                if i == 0:
-                    headers = [str(c).strip() if c else "" for c in row]
-                    if headers != [cn for cn, _ in COLUMN_MAP]:
-                        logger.warning("Excel 列头不完全匹配定义，仍按列顺序映射")
-                    continue
-
-                db_row: dict[str, Any] = {}
-                for j, (_, col) in enumerate(COLUMN_MAP):
-                    val = row[j] if j < len(row) else None
-                    db_row[col] = convert(col, val)
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                data_rows += 1
+                excel_row = dict(zip(headers, row))
+                db_row = {
+                    column: convert(column, excel_row.get(header))
+                    for header, column in IMPORT_COLUMN_MAP
+                }
 
                 # 合同编号是业务必填字段。
                 if db_row["contract_id"] is None:
@@ -283,7 +332,7 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
                 else:
                     kept_excel_system_engineer += 1
 
-                db_values = [db_row[col] for _, col in COLUMN_MAP]
+                db_values = [db_row[col] for _, col in IMPORT_COLUMN_MAP]
 
                 try:
                     cursor.execute(INSERT_SQL, db_values)
@@ -298,9 +347,9 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
                 except Exception:
                     skipped += 1
 
-                if (i % batch_size) == 0:
+                if (data_rows % batch_size) == 0:
                     conn.commit()
-                    logger.info("已处理 %d 行 ...", i)
+                    logger.info("已处理 %d 行 ...", data_rows)
 
         conn.commit()
     finally:
@@ -320,7 +369,7 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
     )
     return {
         "file": file_path.name,
-        "rows": i - 1 if i else 0,
+        "rows": data_rows,
         "inserted": inserted,
         "updated": updated,
         "unchanged": unchanged,
