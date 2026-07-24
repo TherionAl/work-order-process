@@ -20,7 +20,8 @@ from __future__ import annotations
 import logging
 import signal
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import Any
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -36,8 +37,6 @@ from .mysql_storage import (
     import_customers_to_mysql,
     import_month_tickets_to_mysql,
 )
-from .time_metrics import DEFAULT_CALENDAR_PATH, DEFAULT_METRICS_CONFIG
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -45,12 +44,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger("daily_runner")
 
-settings = load_settings()
-dictionary = DataDictionary.from_pdf(settings.dictionary_path)
 sched = BlockingScheduler(timezone="Asia/Shanghai")
+_settings: Any | None = None
+_dictionary: DataDictionary | None = None
 
 
-def sync_tickets_for_month(year: int, month: int) -> None:
+class ScheduledSyncError(RuntimeError):
+    """Raised after all scheduled months run when any month failed."""
+
+
+def _runtime() -> tuple[Any, DataDictionary]:
+    global _settings, _dictionary
+    if _settings is None:
+        _settings = load_settings()
+    if _dictionary is None:
+        _dictionary = DataDictionary.from_pdf(_settings.dictionary_path)
+    return _settings, _dictionary
+
+
+def sync_tickets_for_month(year: int, month: int) -> dict[str, Any]:
     """同步单个自然月的工单。
 
     当月：新增 + 按 updateDT 检测变化更新已有工单。
@@ -58,37 +70,75 @@ def sync_tickets_for_month(year: int, month: int) -> None:
     变化的重新拉取详情并 upsert；未变化的自动 skip。
     """
     logger.info("开始同步 %d-%02d 工单", year, month)
-    try:
-        with WorkOrderClient(settings) as client:
-            client.authenticate()
-            report = import_month_tickets_to_mysql(
-                settings.mysql, dictionary, client,
-                year=year, month=month,
-                max_workers=8, batch_size=100, api_rate_limit=10,
-            )
-        logger.info(
-            "%d-%02d 完成: imported=%d updated=%d skipped=%d failed=%d",
-            year, month,
-            report.get("imported", 0), report.get("updated", 0),
-            report.get("skipped", 0), report.get("failed", 0),
+    settings, dictionary = _runtime()
+    with WorkOrderClient(settings) as client:
+        client.authenticate()
+        report = import_month_tickets_to_mysql(
+            settings.mysql, dictionary, client,
+            year=year, month=month,
+            max_workers=8, batch_size=100, api_rate_limit=10,
         )
-    except Exception:
-        logger.exception("%d-%02d 同步异常", year, month)
+    logger.info(
+        "%d-%02d 完成: imported=%d updated=%d skipped=%d failed=%d",
+        year, month,
+        report.get("imported", 0), report.get("updated", 0),
+        report.get("skipped", 0), report.get("failed", 0),
+    )
+    return report
+
+
+def _run_sync_months(months: list[tuple[int, int]]) -> None:
+    failures: list[str] = []
+    for year, month in months:
+        try:
+            report = sync_tickets_for_month(year, month)
+        except Exception as exc:
+            logger.exception("%d-%02d 同步异常", year, month)
+            failures.append(f"{year}-{month:02d}: {exc}")
+            continue
+        failed = int(report.get("failed", 0))
+        if failed:
+            failures.append(f"{year}-{month:02d}: failed={failed}")
+    if failures:
+        raise ScheduledSyncError("; ".join(failures))
+
+
+def maintenance_months(
+    now: datetime,
+    rolling_months: int = 4,
+) -> list[tuple[int, int]]:
+    """Return old months outside the daily rolling synchronization window."""
+    rolling = {
+        (
+            (now - relativedelta(months=offset)).year,
+            (now - relativedelta(months=offset)).month,
+        )
+        for offset in range(rolling_months)
+    }
+    target_year = now.year if now.month >= rolling_months else now.year - 1
+    return [
+        (target_year, month)
+        for month in range(1, 13)
+        if (target_year, month) not in rolling
+        and datetime(target_year, month, 1) < now
+    ]
 
 
 def job_sync_tickets_daily() -> None:
     """每天 02:17：导入当月 + 前溯 3 个月（覆盖近 ~90-120 天内）的工单。"""
     logger.info("定时任务: daily_sync_tickets")
     now = datetime.now()
-    # delta=0 当月，delta=1..3 前溯 3 个月；共 4 个月 ≈ 90-120 天
-    for delta in [0, 1, 2, 3]:
-        d = now - relativedelta(months=delta)
-        sync_tickets_for_month(d.year, d.month)
+    months = []
+    for delta in range(4):
+        target = now - relativedelta(months=delta)
+        months.append((target.year, target.month))
+    _run_sync_months(months)
 
 
 def job_sync_customers_contacts() -> None:
     """每周日 03:17：导入客户/公司 + 联系人。"""
     logger.info("定时任务: sync_customers_contacts")
+    settings, _ = _runtime()
     with WorkOrderClient(settings) as client:
         client.authenticate()
         import_customers_to_mysql(settings.mysql, client)
@@ -96,33 +146,26 @@ def job_sync_customers_contacts() -> None:
 
 
 def job_monthly_maintenance() -> None:
-    """每月 1 号 04:17：刷新当年 90 天前的老月份 + 创建后续 6 个月分区。
-
-    cutoff = 今天 - 90 天。
-    - 不跨年：刷新当年 1 月 ~ (cutoff月份-1) 的老数据。
-    - 跨年：刷新去年 (cutoff月份+1) ~ 12 月的老数据。
-    90 天前的工单更新频率低，每月补一次即可。
-    """
+    """每月 1 号 04:17：刷新滚动窗口外的老月份并创建后续分区。"""
     logger.info("定时任务: monthly_maintenance (老月份刷新 + 分区维护)")
     now = datetime.now()
-    cutoff = now - timedelta(days=90)
-
-    if cutoff.year == now.year:
-        # 不跨年：当年 1 月 ~ cutoff月份-1（这些在 90 天前，不被每日覆盖）
-        for month in range(1, cutoff.month):
-            sync_tickets_for_month(now.year, month)
-    else:
-        # 跨年：去年 cutoff月份+1 ~ 12 月（去年最后几月在 90 天前）
-        for month in range(cutoff.month + 1, 13):
-            sync_tickets_for_month(cutoff.year, month)
+    sync_error: ScheduledSyncError | None = None
+    try:
+        _run_sync_months(maintenance_months(now))
+    except ScheduledSyncError as exc:
+        sync_error = exc
 
     # 创建后续 6 个月分区
+    settings, _ = _runtime()
     months = generate_months_ahead(6)
     add_future_partitions(settings.mysql, months)
     logger.info("monthly_maintenance 完成: 分区已创建")
+    if sync_error is not None:
+        raise sync_error
 
 
 def main() -> None:
+    _runtime()
     # 注册任务
     sched.add_job(
         job_sync_tickets_daily,
