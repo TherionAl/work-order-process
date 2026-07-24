@@ -1,0 +1,27 @@
+[Unit]
+Description=Work Order Data Lake Daily Scheduler
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=workorder
+Group=workorder
+WorkingDirectory=/opt/work_order_process
+EnvironmentFile=/etc/work-order-process/work-order.env
+ExecStart=/opt/work_order_process/.venv/bin/python -m work_order_process.daily_runner
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/work_order_process/output /var/log/work-order-process
+StandardOutput=append:/var/log/work-order-process/daily_runner.log
+StandardError=append:/var/log/work-order-process/daily_runner.log
+
+[Install]
+WantedBy=multi-user.target

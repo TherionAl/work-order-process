@@ -37,11 +37,17 @@ from .mysql_storage import (
     import_customers_to_mysql,
     import_month_tickets_to_mysql,
 )
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
+
+def configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+configure_logging()
 logger = logging.getLogger("daily_runner")
 
 sched = BlockingScheduler(timezone="Asia/Shanghai")
