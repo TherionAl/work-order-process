@@ -26,19 +26,29 @@ SALES_PLATFORM_BASELINE_KEY_COLUMNS = ("contract_id", "item_code", "exec_detail_
 # Backward-compatible public alias for the historical 69-column contract.
 COLUMN_MAP = LEGACY_ERP_COLUMN_MAP
 IMPORT_COLUMN_MAP = STANDARD_ERP_COLUMN_MAP
+IMPORT_COLUMNS = tuple(column for _, column in IMPORT_COLUMN_MAP)
+STAGE_TABLE = "erp_data_import_stage"
+SNAPSHOT_KEY_COLUMNS = ("contract_id", "item_code", "exec_detail_id")
+ALLOCATION_COLUMNS = tuple(column for _, column in STANDARD_ERP_COLUMN_MAP[-9:])
 
-INSERT_SQL = (
-    "INSERT INTO erp_data ("
-    + ", ".join(col for _, col in IMPORT_COLUMN_MAP)
-    + ") VALUES ("
-    + ", ".join(["%s"] * len(IMPORT_COLUMN_MAP))
-    + ") ON DUPLICATE KEY UPDATE "
-    + ", ".join(
-        f"{col} = VALUES({col})"
-        for _, col in IMPORT_COLUMN_MAP
-        if col not in {"contract_id", "item_code", "exec_detail_id", "create_date"}
-    )
+STAGE_CREATE_SQL = (
+    f"CREATE TEMPORARY TABLE {STAGE_TABLE} ENGINE=InnoDB AS "
+    f"SELECT {', '.join(IMPORT_COLUMNS)} FROM erp_data WHERE 1 = 0"
 )
+STAGE_INSERT_SQL = (
+    f"INSERT INTO {STAGE_TABLE} ({', '.join(IMPORT_COLUMNS)}) VALUES ("
+    + ", ".join(["%s"] * len(IMPORT_COLUMNS))
+    + ")"
+)
+PUBLISH_INSERT_SQL = (
+    f"INSERT INTO erp_data ({', '.join(IMPORT_COLUMNS)}) "
+    f"SELECT {', '.join(IMPORT_COLUMNS)} FROM {STAGE_TABLE} "
+    "WHERE create_date = %s"
+)
+
+
+class ERPImportError(RuntimeError):
+    """Raised when an ERP snapshot cannot be validated or published."""
 
 
 def _to_date(value) -> str | None:
@@ -246,11 +256,113 @@ def apply_sales_platform_system_engineer(
     return True
 
 
+def _validate_erp_row(
+    row: Mapping[str, object],
+    source_row: int,
+    *,
+    require_allocation_fields: bool,
+) -> None:
+    for column in (*SNAPSHOT_KEY_COLUMNS, "create_date"):
+        if row.get(column) is None:
+            raise ERPImportError(f"{column} 为空，源数据第 {source_row} 行无法导入。")
+    if require_allocation_fields:
+        missing = [column for column in ALLOCATION_COLUMNS if row.get(column) is None]
+        if missing:
+            raise ERPImportError(
+                f"标准 ERP 数据第 {source_row} 行缺少年度分摊字段: "
+                + ", ".join(missing)
+            )
+
+
+def _insert_stage_batch(
+    cursor: Any,
+    batch: list[tuple[int, tuple[object, ...]]],
+) -> None:
+    values = [row_values for _, row_values in batch]
+    try:
+        cursor.executemany(STAGE_INSERT_SQL, values)
+    except Exception as exc:
+        first_row = batch[0][0]
+        last_row = batch[-1][0]
+        raise ERPImportError(
+            f"ERP 临时表写入失败，源数据行 {first_row}-{last_row}: {exc}"
+        ) from exc
+
+
+def _validate_staged_snapshot(
+    cursor: Any,
+    *,
+    create_date: str,
+    expected_rows: int,
+) -> None:
+    cursor.execute(f"SELECT COUNT(*) FROM {STAGE_TABLE}")
+    staged_rows = int(cursor.fetchone()[0])
+    if staged_rows != expected_rows:
+        raise ERPImportError(
+            f"ERP 临时表行数不一致: expected={expected_rows}, staged={staged_rows}"
+        )
+
+    cursor.execute(
+        f"""
+        SELECT contract_id, item_code, exec_detail_id, COUNT(*)
+        FROM {STAGE_TABLE}
+        GROUP BY contract_id, item_code, exec_detail_id
+        HAVING COUNT(*) > 1
+        LIMIT 1
+        """
+    )
+    duplicate = cursor.fetchone()
+    if duplicate:
+        raise ERPImportError(
+            "ERP 快照存在重复业务键: "
+            f"contract_id={duplicate[0]}, item_code={duplicate[1]}, "
+            f"exec_detail_id={duplicate[2]}, count={duplicate[3]}"
+        )
+
+    cursor.execute(
+        f"SELECT COUNT(DISTINCT create_date), MIN(create_date), MAX(create_date) "
+        f"FROM {STAGE_TABLE}"
+    )
+    distinct_count, minimum, maximum = cursor.fetchone()
+    if int(distinct_count) != 1 or str(minimum) != create_date or str(maximum) != create_date:
+        raise ERPImportError(
+            "本次 ERP 数据必须且只能包含一个快照日期: "
+            f"expected={create_date}, min={minimum}, max={maximum}"
+        )
+
+
+def _publish_staged_snapshot(
+    cursor: Any,
+    *,
+    create_date: str,
+    expected_rows: int,
+) -> int:
+    cursor.execute(
+        "DELETE FROM erp_data WHERE create_date = %s",
+        (create_date,),
+    )
+    replaced_rows = max(int(cursor.rowcount), 0)
+    cursor.execute(PUBLISH_INSERT_SQL, (create_date,))
+    cursor.execute(
+        "SELECT COUNT(*) FROM erp_data WHERE create_date = %s",
+        (create_date,),
+    )
+    published_rows = int(cursor.fetchone()[0])
+    if published_rows != expected_rows:
+        raise ERPImportError(
+            f"ERP 正式快照行数不一致: expected={expected_rows}, "
+            f"published={published_rows}"
+        )
+    return replaced_rows
+
+
 def _import_erp_records(
     config: MySQLConfig,
     excel_rows: Iterable[Mapping[str, object]],
     source_name: str,
     batch_size: int = 5000,
+    *,
+    require_allocation_fields: bool = True,
 ) -> dict:
     """Import normalized ERP records using the same rules for every source."""
     import pymysql
@@ -267,16 +379,13 @@ def _import_erp_records(
         autocommit=False,
     )
 
-    inserted = 0
-    updated = 0
-    unchanged = 0
-    skipped = 0
     reused_baseline_sales_platform = 0
     new_sales_platform = 0
     applied_system_engineer_mapping = 0
     kept_excel_system_engineer = 0
     data_rows = 0
-    create_dates: set[str] = set()
+    create_date: str | None = None
+    replaced_rows = 0
     started = time.time()
 
     try:
@@ -290,19 +399,29 @@ def _import_erp_records(
                 len(sales_platform_baseline),
                 BASELINE_SALES_PLATFORM_CREATE_DATE,
             )
+            cursor.execute(STAGE_CREATE_SQL)
+            conn.commit()
+            stage_batch: list[tuple[int, tuple[object, ...]]] = []
             for excel_row in excel_rows:
                 data_rows += 1
                 db_row = {
                     column: convert(column, excel_row.get(header))
                     for header, column in IMPORT_COLUMN_MAP
                 }
-
-                # 合同编号是业务必填字段。
-                if db_row["contract_id"] is None:
-                    skipped += 1
-                    continue
-                if db_row["create_date"] is not None:
-                    create_dates.add(str(db_row["create_date"]))
+                source_row = data_rows + 1
+                _validate_erp_row(
+                    db_row,
+                    source_row,
+                    require_allocation_fields=require_allocation_fields,
+                )
+                row_create_date = str(db_row["create_date"])
+                if create_date is None:
+                    create_date = row_create_date
+                elif row_create_date != create_date:
+                    raise ERPImportError(
+                        f"本次 ERP 数据包含多个快照日期: {create_date}, "
+                        f"{row_create_date}（源数据第 {source_row} 行）"
+                    )
 
                 if apply_baseline_sales_platform(db_row, sales_platform_baseline):
                     reused_baseline_sales_platform += 1
@@ -317,36 +436,52 @@ def _import_erp_records(
                 else:
                     kept_excel_system_engineer += 1
 
-                db_values = [db_row[col] for _, col in IMPORT_COLUMN_MAP]
-
-                try:
-                    cursor.execute(INSERT_SQL, db_values)
-                    if cursor.rowcount == 1:
-                        inserted += 1
-                    elif cursor.rowcount == 2:
-                        updated += 1
-                    elif cursor.rowcount == 0:
-                        unchanged += 1
-                    else:
-                        skipped += 1
-                except Exception:
-                    skipped += 1
-
-                if (data_rows % batch_size) == 0:
+                stage_batch.append(
+                    (
+                        source_row,
+                        tuple(db_row[column] for column in IMPORT_COLUMNS),
+                    )
+                )
+                if len(stage_batch) >= batch_size:
+                    _insert_stage_batch(cursor, stage_batch)
                     conn.commit()
+                    stage_batch.clear()
                     logger.info("已处理 %d 行 ...", data_rows)
 
-        conn.commit()
+            if stage_batch:
+                _insert_stage_batch(cursor, stage_batch)
+                conn.commit()
+            if not data_rows or create_date is None:
+                raise ERPImportError("ERP 数据源不包含可导入的数据行。")
+
+            _validate_staged_snapshot(
+                cursor,
+                create_date=create_date,
+                expected_rows=data_rows,
+            )
+            conn.begin()
+            replaced_rows = _publish_staged_snapshot(
+                cursor,
+                create_date=create_date,
+                expected_rows=data_rows,
+            )
+            conn.commit()
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if isinstance(exc, ERPImportError):
+            raise
+        raise ERPImportError(f"ERP 快照导入失败: {exc}") from exc
     finally:
         conn.close()
 
     seconds = round(time.time() - started, 1)
     logger.info(
-        "导入完成: 插入 %d, 更新 %d, 未变化 %d, 跳过 %d, 复用基准营销平台 %d, 套用体系工程师映射 %d, 耗时 %ss",
-        inserted,
-        updated,
-        unchanged,
-        skipped,
+        "导入完成: 发布 %d, 替换旧快照 %d, 复用基准营销平台 %d, 套用体系工程师映射 %d, 耗时 %ss",
+        data_rows,
+        replaced_rows,
         reused_baseline_sales_platform,
         applied_system_engineer_mapping,
         seconds,
@@ -354,15 +489,17 @@ def _import_erp_records(
     return {
         "file": source_name,
         "rows": data_rows,
-        "inserted": inserted,
-        "updated": updated,
-        "unchanged": unchanged,
-        "skipped": skipped,
+        "inserted": data_rows,
+        "updated": 0,
+        "unchanged": 0,
+        "skipped": 0,
+        "published_rows": data_rows,
+        "replaced_rows": replaced_rows,
         "reused_baseline_sales_platform": reused_baseline_sales_platform,
         "new_sales_platform": new_sales_platform,
         "applied_system_engineer_mapping": applied_system_engineer_mapping,
         "kept_excel_system_engineer": kept_excel_system_engineer,
-        "create_dates": sorted(create_dates),
+        "create_dates": [create_date],
         "seconds": seconds,
     }
 
@@ -379,7 +516,13 @@ def import_erp_xlsx(config: MySQLConfig, file_path: Path, batch_size: int = 5000
             for row in ws.iter_rows(min_row=2, values_only=True):
                 yield dict(zip(headers, row, strict=True))
 
-        return _import_erp_records(config, excel_rows(), file_path.name, batch_size)
+        return _import_erp_records(
+            config,
+            excel_rows(),
+            file_path.name,
+            batch_size,
+            require_allocation_fields=len(headers) == len(standard_headers()),
+        )
     finally:
         wb.close()
 
@@ -394,7 +537,13 @@ def import_erp_dataframe(config: MySQLConfig, dataframe, batch_size: int = 5000)
         for row in dataframe.itertuples(index=False, name=None):
             yield dict(zip(headers, row, strict=True))
 
-    return _import_erp_records(config, dataframe_rows(), "<memory>", batch_size)
+    return _import_erp_records(
+        config,
+        dataframe_rows(),
+        "<memory>",
+        batch_size,
+        require_allocation_fields=True,
+    )
 
 
 def main():
