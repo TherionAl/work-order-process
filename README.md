@@ -9,8 +9,9 @@
 1. 按创建时间导出指定年份或月份的工单列表。
 2. 生成三段式详情 JSON：`raw`、`value_resolved`、`chinese`。
 3. 保留原始 ID，同时补充可读名称字段，便于入库后分析。
-4. 支持 MySQL 5 表结构：工单主表、自定义字段明细、客户、联系人、同步日志。
+4. 支持工单、客户、联系人、ERP、台账及营收汇总数据统一进入 MySQL 数据湖。
 5. 支持按月分区、未来分区创建、按月/按年批量导入、断点续跑和同步日志查看。
+6. 支持新旧 ERP 原始文件直接合并、计算年度分摊、原子替换数据库快照并导出数据库同版 Excel。
 
 ## 环境准备
 
@@ -29,7 +30,7 @@ WORKORDER_BASE_URL=https://workorder.bosssoft.com.cn/api/v1
 
 WORKORDER_MYSQL_HOST=127.0.0.1
 WORKORDER_MYSQL_PORT=3306
-WORKORDER_MYSQL_USER=root
+WORKORDER_MYSQL_USER=workorder
 WORKORDER_MYSQL_PASSWORD=your_mysql_password
 WORKORDER_MYSQL_DATABASE=work_order_datalake
 ```
@@ -172,11 +173,20 @@ output/mysql_import_logs/YYYY-MM_failed.json
 
 这样既能追溯源系统主键，又能直接用于报表展示。
 
+## 项目文档
+
+- [数据库设计与使用说明](docs/database_usage.md)
+- [ERP 合并与分摊字段说明](docs/erp_merge/标准Sheet1与分摊字段说明.md)
+- [工单 API 数据解析映射](docs/api_data_resolution_mapping.md)
+- [人员数据入库说明](docs/personnel_mysql_usage.md)
+- [时间指标使用说明](docs/time_metrics_usage.md)
+- [生产运行、日志和备份说明](docs/production_operations.md)
+
 ## 注意事项
 
 - `mysql-drop-tables` 会删除全部 5 张表，只能在明确确认目标库后使用。
 - 默认分页大小是 `5000`；如果接口 500，降低 `--per-page`。
 - 批量导入前建议先用单月、低并发参数试跑。
 - MySQL 分区已包含 2025/2026 和 `pmax`，后续月份可通过 `mysql-add-partitions` 提前创建。
-- 详细表结构见 `docs/mysql_schema.md`。
-- 合并说明见 `docs/merged_practical_guide.md`。
+- 表结构、关联关系和常用查询以
+  [数据库设计与使用说明](docs/database_usage.md) 为准。

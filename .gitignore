@@ -12,6 +12,8 @@ wheels/
 # Local configuration and generated data
 .env
 output/
+logs/
+backups/
 .pytest_cache/
 *.parsed.json
 
