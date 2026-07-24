@@ -11,6 +11,13 @@ from work_order_process.erp_merge import cli
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+def test_default_statistics_periods_follow_selected_year() -> None:
+    assert cli.default_statistics_periods(2027) == (
+        ("2026-01-01", "2026-12-31"),
+        ("2027-01-01", "2027-12-31"),
+    )
+
+
 def test_cli_help():
     """测试子命令erp-merge可以正常调用并输出帮助信息"""
     result = subprocess.run(
@@ -46,16 +53,6 @@ def test_cli_imports_dataframe_then_exports_database_snapshot(
     standard: list[object] = []
     standard_output = tmp_path / "standard.xlsx"
     document_output = tmp_path / "document.xlsx"
-    periods = {
-        "统计日期区间": {
-            "去年起始": "2025-01-01",
-            "去年截止": "2025-12-31",
-            "今年起始": "2026-01-01",
-            "今年截止": "2026-12-31",
-        }
-    }
-
-    monkeypatch.setattr(cli, "load_config", lambda: periods)
     monkeypatch.setattr(
         cli,
         "merge_erp_sources",
@@ -99,6 +96,8 @@ def test_cli_imports_dataframe_then_exports_database_snapshot(
         str(tmp_path / "rules.xlsx"),
         "--document-output",
         str(document_output),
+        "--statistics-year",
+        "2026",
     ]
     if write_standard:
         argv.extend(["--standard-output", str(standard_output)])
@@ -126,7 +125,6 @@ def test_cli_rejects_document_output_matching_standard_output_before_processing(
     events: list[str] = []
     output = tmp_path / "nested" / ".." / "document.xlsx"
 
-    monkeypatch.setattr(cli, "load_config", lambda: events.append("config"))
     monkeypatch.setattr(cli, "merge_erp_sources", lambda *args: events.append("merge"))
     monkeypatch.setattr(cli, "write_standard_sheet", lambda *args: events.append("standard"))
     monkeypatch.setattr(cli, "import_erp_dataframe", lambda *args: events.append("import"))

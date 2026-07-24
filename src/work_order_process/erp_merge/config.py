@@ -9,8 +9,7 @@ DEFAULT_CONFIG_PATH = (
     / "config"
     / "erp_merge_rules.toml"
 )
-REQUIRED_SECTIONS = ["统计日期区间", "营销平台映射", "体系工程师", "金额换算"]
-REQUIRED_DATE_KEYS = ["去年起始", "去年截止", "今年起始", "今年截止"]
+REQUIRED_SECTIONS = ["营销平台映射", "体系工程师", "金额换算"]
 
 
 def load_config(config_path: Path | None = None) -> dict[str, Any]:
@@ -25,10 +24,5 @@ def load_config(config_path: Path | None = None) -> dict[str, Any]:
     for section in REQUIRED_SECTIONS:
         if section not in config:
             raise ValueError(f"配置缺少必填项：{section}")
-
-    date_section = config["统计日期区间"]
-    for key in REQUIRED_DATE_KEYS:
-        if key not in date_section:
-            raise ValueError(f"统计日期区间缺少必填项：{key}")
 
     return config

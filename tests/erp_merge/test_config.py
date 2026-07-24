@@ -11,15 +11,14 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 def test_load_default_config():
     config = load_config()
-    assert "统计日期区间" in config
-    assert config["统计日期区间"]["去年起始"] == "2025-01-01"
+    assert "统计日期区间" not in config
     assert "营销平台映射" in config
     assert config["营销平台映射"]["海南分公司"] == "广西分公司"
 
 
 def test_load_custom_config():
     config = load_config(FIXTURE_DIR / "test_rules.toml")
-    assert config["统计日期区间"]["去年起始"] == "2024-01-01"
+    assert config["体系工程师"]["博思智合"] == "黄迪"
 
 
 def test_config_missing_required_key():
