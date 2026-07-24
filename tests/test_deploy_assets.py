@@ -39,3 +39,30 @@ def test_logrotate_limits_daily_runner_log_retention() -> None:
     assert "rotate 14" in text
     assert "compress" in text
     assert "create 0640 workorder workorder" in text
+
+
+def test_mysql_backup_uses_protected_client_config_and_retention() -> None:
+    text = (PROJECT_ROOT / "scripts" / "backup_mysql.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "--defaults-extra-file=/etc/work-order-process/mysql-backup.cnf" in text
+    assert "/var/backups/work-order-process" in text
+    assert "mysqldump" in text
+    assert "gzip" in text
+    assert "-mtime" in text
+    assert "--password" not in text
+    assert "MYSQL_PASSWORD" not in text
+
+
+def test_mysql_backup_timer_is_persistent_and_daily() -> None:
+    service = (PROJECT_ROOT / "deploy" / "work-order-backup.service").read_text(
+        encoding="utf-8"
+    )
+    timer = (PROJECT_ROOT / "deploy" / "work-order-backup.timer").read_text(
+        encoding="utf-8"
+    )
+    assert "Type=oneshot" in service
+    assert "User=workorder" in service
+    assert "Group=workorder" in service
+    assert "OnCalendar=*-*-* 01:00:00" in timer
+    assert "Persistent=true" in timer

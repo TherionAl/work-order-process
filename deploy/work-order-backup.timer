@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Work Order Data Lake database backup daily
+
+[Timer]
+OnCalendar=*-*-* 01:00:00
+Persistent=true
+RandomizedDelaySec=10m
+Unit=work-order-backup.service
+
+[Install]
+WantedBy=timers.target

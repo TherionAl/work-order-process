@@ -1,0 +1,14 @@
+[Unit]
+Description=Back up the Work Order Data Lake MySQL database
+
+[Service]
+Type=oneshot
+User=workorder
+Group=workorder
+UMask=0077
+ExecStart=/opt/work_order_process/scripts/backup_mysql.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/backups/work-order-process

@@ -52,3 +52,34 @@ journalctl -u work-order-daily.service -n 100 --no-pager
 ```
 
 数据库侧检查最近的 `sync_task_log`，不能只以 APScheduler 的 executed successfully 作为成功依据。
+
+## 数据库备份
+
+备份组件：
+
+- `scripts/backup_mysql.sh`
+- `deploy/work-order-backup.service`
+- `deploy/work-order-backup.timer`
+- `deploy/mysql-backup.cnf.example`
+
+将 MySQL 客户端配置保存为
+`/etc/work-order-process/mysql-backup.cnf`，文件所有者为 `workorder`，权限为
+`0600`。备份账号只授予 `work_order_datalake` 的备份所需只读权限，不在命令行或
+systemd unit 中写密码。
+
+默认每天 01:00 执行，结果写入 `/var/backups/work-order-process`，保留 14 天。
+可通过 service 的 `Environment=` 覆盖 `DATABASE_NAME`、`BACKUP_DIR` 和
+`RETENTION_DAYS`。
+
+启用前先手动运行并核对：
+
+```bash
+systemctl start work-order-backup.service
+systemctl status work-order-backup.service --no-pager
+gzip -t /var/backups/work-order-process/work_order_datalake_*.sql.gz
+systemctl enable --now work-order-backup.timer
+systemctl list-timers work-order-backup.timer --no-pager
+```
+
+上线后应定期在隔离数据库中执行恢复演练。只有文件存在和 `gzip -t` 成功，不能证明
+SQL 内容可完整恢复。
