@@ -13,6 +13,10 @@ from openpyxl.styles import Font
 from .config import MySQLConfig, PROJECT_ROOT
 
 
+class RevenueSnapshotError(ValueError):
+    """Raised when an ERP snapshot is unsafe for revenue reporting."""
+
+
 ENGLISH_HEADERS = (
     "stat_year",
     "stat_month",
@@ -348,11 +352,77 @@ def fetch_revenue_metrics(
     return metrics
 
 
+def validate_revenue_snapshot(cursor: Any, create_date: str) -> int:
+    """Reject missing snapshots and legacy snapshots without allocation data."""
+    cursor.execute(
+        """
+        SELECT
+            COUNT(*),
+            SUM(prev_year_adjusted_amort IS NULL),
+            SUM(cur_year_adjusted_amort IS NULL)
+        FROM erp_data
+        WHERE create_date = %s
+        """,
+        (create_date,),
+    )
+    result = cursor.fetchone()
+    row_count = int(result[0] or 0) if result else 0
+    if row_count == 0:
+        raise RevenueSnapshotError(f"ERP 快照 {create_date} 不存在。")
+    previous_nulls = int(result[1] or 0)
+    current_nulls = int(result[2] or 0)
+    if previous_nulls or current_nulls:
+        raise RevenueSnapshotError(
+            f"ERP 快照 {create_date} 的年度分摊字段不完整: "
+            f"prev_year_adjusted_amort NULL={previous_nulls}, "
+            f"cur_year_adjusted_amort NULL={current_nulls}"
+        )
+    return row_count
+
+
+def require_revenue_metrics(
+    metrics: Mapping[str, Mapping[str, Decimal]],
+    create_date: str,
+) -> None:
+    """Prevent an empty metric query from becoming an all-zero report."""
+    if not metrics:
+        raise RevenueSnapshotError(
+            f"ERP 快照 {create_date} 没有符合条件的有效营收指标。"
+        )
+
+
 def save_revenue_rows(cursor: Any, rows: list[Mapping[str, Decimal | int | str | None]]) -> None:
     """Upsert one row per statistics month and marketing platform."""
 
     for row in rows:
         cursor.execute(UPSERT_SQL, tuple(row[column] for column in PERSISTED_COLUMNS))
+
+
+def replace_revenue_rows(
+    cursor: Any,
+    *,
+    year: int,
+    month: int,
+    rows: list[Mapping[str, Decimal | int | str | None]],
+) -> None:
+    """Replace the complete platform set for one statistics month."""
+    cursor.execute(
+        "DELETE FROM ops_service_revenue_monthly "
+        "WHERE stat_year = %s AND stat_month = %s",
+        (year, month),
+    )
+    save_revenue_rows(cursor, rows)
+    cursor.execute(
+        "SELECT COUNT(*) FROM ops_service_revenue_monthly "
+        "WHERE stat_year = %s AND stat_month = %s",
+        (year, month),
+    )
+    published_rows = int(cursor.fetchone()[0])
+    if published_rows != len(rows):
+        raise RevenueSnapshotError(
+            f"营收汇总写入行数不一致: expected={len(rows)}, "
+            f"published={published_rows}"
+        )
 
 
 def generate_revenue_summary(
@@ -392,12 +462,14 @@ def generate_revenue_summary(
                 erp_create_date = str(result[0] or "").strip() if result else ""
             if not erp_create_date:
                 raise ValueError("erp_data 中不存在可用的 ERP 快照。")
+            validate_revenue_snapshot(cursor, erp_create_date)
             metrics = fetch_revenue_metrics(
                 cursor,
                 erp_create_date=erp_create_date,
                 year=year,
                 month=month,
             )
+            require_revenue_metrics(metrics, erp_create_date)
             rows = build_revenue_rows(
                 year=year,
                 month=month,
@@ -406,7 +478,12 @@ def generate_revenue_summary(
                 metrics=metrics,
             )
             if persist:
-                save_revenue_rows(cursor, rows)
+                replace_revenue_rows(
+                    cursor,
+                    year=year,
+                    month=month,
+                    rows=rows,
+                )
         if persist:
             connection.commit()
 

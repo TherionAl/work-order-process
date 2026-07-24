@@ -2,8 +2,10 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from openpyxl import Workbook, load_workbook
 
+from work_order_process import revenue_summary
 from work_order_process.revenue_summary import (
     ENGLISH_HEADERS,
     PERSISTED_COLUMNS,
@@ -12,7 +14,6 @@ from work_order_process.revenue_summary import (
     export_revenue_workbook,
     fetch_revenue_metrics,
     load_revenue_targets,
-    save_revenue_rows,
 )
 
 
@@ -114,8 +115,13 @@ def test_export_revenue_workbook_writes_english_chinese_and_total_rows(tmp_path:
 
 
 class _FakeCursor:
-    def __init__(self, rows: list[tuple[object, ...]] | None = None) -> None:
+    def __init__(
+        self,
+        rows: list[tuple[object, ...]] | None = None,
+        fetchone_values: list[tuple[object, ...]] | None = None,
+    ) -> None:
         self.rows = rows or []
+        self.fetchone_values = list(fetchone_values or [])
         self.executed: list[tuple[str, object]] = []
 
     def execute(self, statement: str, parameters=None) -> None:
@@ -123,6 +129,11 @@ class _FakeCursor:
 
     def fetchall(self) -> list[tuple[object, ...]]:
         return self.rows
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        if not self.fetchone_values:
+            return None
+        return self.fetchone_values.pop(0)
 
 
 def test_fetch_revenue_metrics_uses_confirmed_filters_and_adjusted_amortization() -> None:
@@ -154,8 +165,8 @@ def test_fetch_revenue_metrics_uses_confirmed_filters_and_adjusted_amortization(
     assert metrics["厦门分公司"]["recognized_revenue_excluding_estimate"] == Decimal("18")
 
 
-def test_save_revenue_rows_upserts_one_row_per_month_and_platform() -> None:
-    cursor = _FakeCursor()
+def test_replace_revenue_rows_deletes_month_before_inserting_platforms() -> None:
+    cursor = _FakeCursor(fetchone_values=[(1,)])
     rows = build_revenue_rows(
         year=2026,
         month=6,
@@ -164,12 +175,63 @@ def test_save_revenue_rows_upserts_one_row_per_month_and_platform() -> None:
         metrics={},
     )
 
-    save_revenue_rows(cursor, rows)
+    revenue_summary.replace_revenue_rows(
+        cursor,
+        year=2026,
+        month=6,
+        rows=rows,
+    )
 
-    statement, parameters = cursor.executed[0]
+    delete_statement, delete_parameters = cursor.executed[0]
+    assert delete_statement.startswith(
+        "DELETE FROM ops_service_revenue_monthly"
+    )
+    assert delete_parameters == (2026, 6)
+    statement, parameters = cursor.executed[1]
     assert "INSERT INTO ops_service_revenue_monthly" in statement
     assert "ON DUPLICATE KEY UPDATE" in statement
     assert parameters[0:3] == (2026, 6, "厦门分公司")
+    assert cursor.executed[2][0].startswith(
+        "SELECT COUNT(*) FROM ops_service_revenue_monthly"
+    )
+
+
+def test_replace_revenue_rows_rejects_published_row_count_mismatch() -> None:
+    cursor = _FakeCursor(fetchone_values=[(0,)])
+    rows = build_revenue_rows(
+        year=2026,
+        month=6,
+        erp_create_date="20260717",
+        targets={"厦门分公司": Decimal("100")},
+        metrics={},
+    )
+
+    with pytest.raises(ValueError, match=r"expected=1.*published=0"):
+        revenue_summary.replace_revenue_rows(
+            cursor,
+            year=2026,
+            month=6,
+            rows=rows,
+        )
+
+
+def test_validate_revenue_snapshot_rejects_missing_snapshot() -> None:
+    cursor = _FakeCursor(fetchone_values=[(0, None, None)])
+
+    with pytest.raises(ValueError, match=r"20260799.*不存在"):
+        revenue_summary.validate_revenue_snapshot(cursor, "20260799")
+
+
+def test_validate_revenue_snapshot_rejects_null_allocation_fields() -> None:
+    cursor = _FakeCursor(fetchone_values=[(10, 1, 2)])
+
+    with pytest.raises(ValueError, match="年度分摊字段"):
+        revenue_summary.validate_revenue_snapshot(cursor, "20260717")
+
+
+def test_empty_revenue_metrics_are_rejected_before_zero_rows_are_built() -> None:
+    with pytest.raises(ValueError, match=r"20260717.*有效营收指标"):
+        revenue_summary.require_revenue_metrics({}, "20260717")
 
 
 def test_cli_generates_revenue_summary_with_explicit_period_and_snapshot(monkeypatch, tmp_path: Path) -> None:
