@@ -137,6 +137,46 @@ uv run work_order_process mysql-add-partitions --months-ahead 6
 uv run work_order_process mysql-sync-log --log-limit 20
 ```
 
+## ERP、台账和营收
+
+将新旧 ERP 原始文件直接合并、计算 2026 年度分摊、原子写入数据库，再从数据库导出
+单 Sheet 文档版：
+
+```powershell
+uv run erp-merge `
+  --config "新旧ERP字段对照.xlsx" `
+  --input-new "新ERP.xlsx" `
+  --input-old "旧ERP.xlsx" `
+  --statistics-year 2026 `
+  --document-output "output/erp_merge/新旧ERP数据库快照文档版.xlsx"
+```
+
+导入已经整理好的标准 ERP 工作簿：
+
+```powershell
+uv run work_order_process import-erp --erp-file "标准ERP.xlsx"
+```
+
+导入客户台账快照：
+
+```powershell
+uv run work_order_process import-customer-account `
+  --customer-account-file "客户台账.xlsx" `
+  --create-date 20260724
+```
+
+生成并写入月度营收汇总：
+
+```powershell
+uv run work_order_process generate-revenue-summary `
+  --year 2026 `
+  --month 6 `
+  --erp-create-date 20260717 `
+  --revenue-target-file "运维服务营收数据表.xlsx"
+```
+
+人工核对时增加 `--revenue-preview`，只输出 Excel，不修改营收汇总表。
+
 ## 输出目录
 
 月度工单合集：

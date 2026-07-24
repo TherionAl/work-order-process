@@ -83,3 +83,17 @@ systemctl list-timers work-order-backup.timer --no-pager
 
 上线后应定期在隔离数据库中执行恢复演练。只有文件存在和 `gzip -t` 成功，不能证明
 SQL 内容可完整恢复。
+
+## 外部变更清单
+
+以下操作会修改服务器、账号或远程仓库，本次本地代码修复不自动执行：
+
+1. 轮换 API 密码，并更新 `/etc/work-order-process/work-order.env`。
+2. 创建 `workorder` Linux 用户及最小权限 MySQL 应用、备份账号。
+3. 将环境文件和 MySQL 备份配置设为 `0600`，相关目录设为 `0700`。
+4. 安装并启用 `work-order-daily.service` 和 logrotate 配置。
+5. 确认现有基础设施备份后，再启用 `work-order-backup.timer`。
+6. 在 Linux 上执行 `bash -n scripts/backup_mysql.sh` 和一次隔离恢复演练。
+7. 修复本机 SSH `KexAlgorithms` 兼容配置。
+8. 评估历史凭据风险，明确确认后再决定是否重写 Git 历史和强制推送。
+9. 将同一 Git 提交部署到服务器，重启服务后执行数据库只读验收。
