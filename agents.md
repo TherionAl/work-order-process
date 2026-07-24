@@ -26,13 +26,7 @@
 
    1.4 接口参数相关信息通用文档地址：https://doc.bangwo8.com/
 
-   1.5  项目所需参数：
-
-      USERNAME = "bosssoft2021"
-
-   ​    PASSWORD = "Bosi_soft2024"
-
-   ​    实际项目地址前缀 = "https://workorder.bosssoft.com.cn/api/v1"
+   1.5 项目运行参数：复制 `.env.example` 为本机 `.env`，真实账号、密码和数据库凭据不得写入本文件或提交到 Git。
 
    1.6 获取数据后的定义文件：数据字典-帮我吧.pdf
 

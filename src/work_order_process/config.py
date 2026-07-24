@@ -1,14 +1,12 @@
 """项目配置读取。
 
-配置来源优先级为：环境变量/.env > agents.md > 代码默认值。
-这样既能把接口账号、密码等参数记录在 agents.md 中供新会话读取，也允许临时用
-.env 或环境变量覆盖接口路径、分页大小、抽样数量等运行参数。
+接口和数据库凭据只允许来自环境变量或项目根目录的 .env。
+非敏感运行参数可以使用代码默认值，并允许通过环境变量覆盖。
 """
 
 from __future__ import annotations
 
 import os
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,34 +24,9 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-AGENTS_FILE = PROJECT_ROOT / "agents.md"
 DEFAULT_BASE_URL = "https://workorder.bosssoft.com.cn/api/v1"
 DEFAULT_DICTIONARY_PATH = PROJECT_ROOT / "数据字典-帮我吧.pdf"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output"
-
-
-def _read_agents_defaults(path: Path | None = None) -> dict[str, str]:
-    """从 agents.md 中读取用户名、密码和接口地址前缀。"""
-
-    if path is None:
-        path = AGENTS_FILE
-    """从 agents.md 中读取用户名、密码和接口地址前缀。"""
-
-    if not path.exists():
-        return {}
-
-    text = path.read_text(encoding="utf-8", errors="ignore")
-    patterns = {
-        "username": r'USERNAME\s*=\s*"([^"]+)"',
-        "password": r'PASSWORD\s*=\s*"([^"]+)"',
-        "base_url": r'实际项目地址前缀\s*=\s*"([^"]+)"',
-    }
-    values: dict[str, str] = {}
-    for key, pattern in patterns.items():
-        match = re.search(pattern, text)
-        if match:
-            values[key] = match.group(1).strip()
-    return values
 
 
 def _split_csv(value: str | None) -> list[str]:
@@ -111,24 +84,23 @@ class ConfigError(RuntimeError):
 def load_settings() -> Settings:
     """加载项目运行配置。
 
-    默认会读取项目根目录下的 .env 和 agents.md。接口路径保留多个候选值，
-    是为了兼容接口文档和实际环境中可能存在的命名差异。
+    默认会读取项目根目录下的 .env。接口路径保留多个候选值，是为了兼容接口
+    文档和实际环境中可能存在的命名差异。
 
     启动时校验必填字段，避免运行到一半才发现凭据缺失。
     """
 
     load_dotenv(PROJECT_ROOT / ".env")
-    agents = _read_agents_defaults()
 
-    username = os.getenv("WORKORDER_USERNAME") or agents.get("username", "")
-    password = os.getenv("WORKORDER_PASSWORD") or agents.get("password", "")
+    username = os.getenv("WORKORDER_USERNAME", "")
+    password = os.getenv("WORKORDER_PASSWORD", "")
     if not username or not password:
         raise ConfigError(
-            "缺少接口认证凭据。请在 .env 中设置 WORKORDER_USERNAME 和 WORKORDER_PASSWORD，"
-            "或在 agents.md 中填写 USERNAME 和 PASSWORD。"
+            "缺少接口认证凭据。请在 .env 或环境变量中设置 "
+            "WORKORDER_USERNAME 和 WORKORDER_PASSWORD。"
         )
 
-    base_url = os.getenv("WORKORDER_BASE_URL") or agents.get("base_url") or DEFAULT_BASE_URL
+    base_url = os.getenv("WORKORDER_BASE_URL") or DEFAULT_BASE_URL
     base_url = base_url.rstrip("/")
 
     endpoint = EndpointConfig(
@@ -173,7 +145,7 @@ def load_settings() -> Settings:
         mysql=MySQLConfig(
             host=os.getenv("WORKORDER_MYSQL_HOST", "127.0.0.1"),
             port=int(os.getenv("WORKORDER_MYSQL_PORT", "3306")),
-            user=os.getenv("WORKORDER_MYSQL_USER", "root"),
+            user=os.getenv("WORKORDER_MYSQL_USER", "workorder"),
             password=os.getenv("WORKORDER_MYSQL_PASSWORD", ""),
             database=os.getenv("WORKORDER_MYSQL_DATABASE", "work_order_datalake"),
         ),

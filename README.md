@@ -18,10 +18,7 @@
 uv sync
 ```
 
-配置优先级：
-
-1. `.env`
-2. `agents.md` 中的 `USERNAME`、`PASSWORD`、实际项目地址前缀
+接口和数据库凭据只从环境变量或本机 `.env` 读取，不得写入 `agents.md` 或提交到 Git。
 
 `.env` 示例：
 
