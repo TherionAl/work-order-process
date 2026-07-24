@@ -4,7 +4,9 @@
 
 本文档说明组合版项目中工单 API、字段解析、value 处理、JSON 导出和 MySQL 入库之间的对应关系。
 
-数据库最终结构、分区、同步策略详见 `docs/mysql_schema.md`；整体开发进度详见 `docs/development_progress.md`。
+数据库最终结构、关联关系、分区和查询方式详见
+`docs/database_usage.md`；生产同步、日志和备份策略详见
+`docs/production_operations.md`。
 
 ## 当前输出目标
 
