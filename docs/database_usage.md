@@ -124,8 +124,8 @@ invalid_contract_type = 有效
 | 确收完成值 | 基础有效条件下汇总 `cur_year_revenue`，允许暂估 |
 | 不含暂估确收值 | 基础有效条件且 `is_estimated_ops = 否`，汇总 `cur_year_revenue` |
 | 去年同期确收值 | 同上，汇总 `prev_year_revenue` |
-| 在手合同额 | 非暂估有效合同且申请日期早于当年年初，汇总 `cur_year_adjusted_amort` |
-| 去年同期在手合同额 | 非暂估有效合同且申请日期早于去年年初，汇总 `prev_year_adjusted_amort` |
+| 在手合同额 | 非暂估有效合同且申请日期不晚于统计月末，汇总 `cur_year_adjusted_amort` |
+| 去年同期在手合同额 | 非暂估有效合同且申请日期不晚于去年同期月末，汇总 `prev_year_adjusted_amort` |
 | 签约完成值 | 非暂估有效合同且申请日期位于当年年初至统计月末，汇总 `product_amount` |
 | 去年同期签约值 | 非暂估有效合同且申请日期位于去年同期区间，汇总 `product_amount` |
 | 完成率 | 完成值 / 目标值；分母为零时为 NULL |

@@ -9,7 +9,12 @@ import pandas as pd
 from openpyxl import Workbook
 
 from work_order_process import erp_import
-from work_order_process.erp_schema import STANDARD_ERP_COLUMN_MAP, legacy_headers, standard_headers
+from work_order_process.erp_schema import (
+    LEGACY_ERP_COLUMN_MAP,
+    STANDARD_ERP_COLUMN_MAP,
+    legacy_headers,
+    standard_headers,
+)
 
 
 class FakeCursor:
@@ -226,6 +231,9 @@ def test_import_legacy_sheet_inserts_null_for_all_allocation_columns(
     path = tmp_path / "legacy.xlsx"
     headers = list(reversed(legacy_headers()))
     values_by_header = {header: f"value-{index}" for index, header in enumerate(headers)}
+    for header, column in LEGACY_ERP_COLUMN_MAP:
+        if erp_import.CONVERTERS.get(column) is erp_import._to_decimal:
+            values_by_header[header] = "1.25"
     values_by_header[legacy_headers()[1]] = "CONTRACT-1"
     _write_workbook(path, headers, [values_by_header[header] for header in headers])
 
@@ -242,6 +250,9 @@ def test_import_reordered_standard_sheet_maps_allocation_values_by_header(
     path = tmp_path / "standard.xlsx"
     headers = list(reversed(standard_headers()))
     values_by_column = {column: f"text-{index}" for index, (_, column) in enumerate(STANDARD_ERP_COLUMN_MAP)}
+    for _, column in STANDARD_ERP_COLUMN_MAP:
+        if erp_import.CONVERTERS.get(column) is erp_import._to_decimal:
+            values_by_column[column] = "1.25"
     values_by_column.update(
         {
             "contract_id": "CONTRACT-2",
@@ -344,6 +355,32 @@ def test_import_rejects_incomplete_snapshot_key(
             _fake_config(),
             _standard_frame(item_code=None),
         )
+
+
+def test_import_rejects_nonempty_invalid_amount_with_field_and_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = FakeConnection()
+    monkeypatch.setattr(erp_import, "ensure_auxiliary_schema", lambda config: None)
+    monkeypatch.setitem(
+        sys.modules,
+        "pymysql",
+        SimpleNamespace(connect=lambda **kwargs: connection),
+    )
+
+    with pytest.raises(
+        erp_import.ERPImportError,
+        match=r"产品金额.*product_amount.*第 2 行.*BAD",
+    ):
+        erp_import.import_erp_dataframe(
+            _fake_config(),
+            _standard_frame(product_amount="BAD"),
+        )
+
+    assert not any(
+        statement.startswith("DELETE FROM erp_data")
+        for statement, _ in connection.cursor_instance.statements
+    )
 
 
 def test_import_database_error_does_not_publish_snapshot(

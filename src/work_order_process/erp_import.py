@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -27,6 +28,9 @@ SALES_PLATFORM_BASELINE_KEY_COLUMNS = ("contract_id", "item_code", "exec_detail_
 COLUMN_MAP = LEGACY_ERP_COLUMN_MAP
 IMPORT_COLUMN_MAP = STANDARD_ERP_COLUMN_MAP
 IMPORT_COLUMNS = tuple(column for _, column in IMPORT_COLUMN_MAP)
+IMPORT_COLUMN_LABELS = {
+    column: header for header, column in IMPORT_COLUMN_MAP
+}
 STAGE_TABLE = "erp_data_import_stage"
 SNAPSHOT_KEY_COLUMNS = ("contract_id", "item_code", "exec_detail_id")
 ALLOCATION_COLUMNS = tuple(column for _, column in STANDARD_ERP_COLUMN_MAP[-9:])
@@ -73,14 +77,18 @@ def _to_date(value) -> str | None:
     return parsed.strftime("%Y-%m-%d")
 
 
-def _to_decimal(value) -> float | None:
+def _to_decimal(value) -> Decimal | None:
     """把数值转为 Decimal。"""
     if value is None or value == "":
         return None
-    try:
-        return float(str(value).replace(",", "").strip())
-    except (ValueError, TypeError):
+    text = str(value).replace(",", "").strip()
+    if text in {"", "/"} or text.lower() in {"nan", "nat", "<na>"}:
         return None
+    try:
+        result = Decimal(text)
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    return result if result.is_finite() else None
 
 
 def _to_int(value) -> int | None:
@@ -145,10 +153,35 @@ CONVERTERS = {
 }
 
 
-def convert(col_name: str, value) -> object:
+def convert(
+    col_name: str,
+    value,
+    *,
+    source_row: int | None = None,
+    source_name: str | None = None,
+) -> object:
     fn = CONVERTERS.get(col_name)
     if fn:
-        return fn(value)
+        converted = fn(value)
+        if (
+            fn is _to_decimal
+            and converted is None
+            and value is not None
+            and str(value).strip() not in {"", "/"}
+            and str(value).strip().lower() not in {"nan", "nat", "<na>"}
+        ):
+            location = (
+                f"{source_name} 第 {source_row} 行"
+                if source_name and source_row is not None
+                else f"第 {source_row} 行"
+                if source_row is not None
+                else "ERP 数据"
+            )
+            label = IMPORT_COLUMN_LABELS.get(col_name, col_name)
+            raise ERPImportError(
+                f"{label}（{col_name}）在 {location}无法解析为金额: {value!r}"
+            )
+        return converted
     return _to_str(value)
 
 
@@ -404,11 +437,16 @@ def _import_erp_records(
             stage_batch: list[tuple[int, tuple[object, ...]]] = []
             for excel_row in excel_rows:
                 data_rows += 1
+                source_row = data_rows + 1
                 db_row = {
-                    column: convert(column, excel_row.get(header))
+                    column: convert(
+                        column,
+                        excel_row.get(header),
+                        source_row=source_row,
+                        source_name=source_name,
+                    )
                     for header, column in IMPORT_COLUMN_MAP
                 }
-                source_row = data_rows + 1
                 _validate_erp_row(
                     db_row,
                     source_row,
