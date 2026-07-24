@@ -25,11 +25,14 @@ def test_normalize_platform(config):
 
 
 def test_add_engineer_column(config):
-    df = pd.DataFrame({"营销平台": ["博思智合", "深圳分公司", "未知分公司"]})
+    df = pd.DataFrame(
+        {"营销平台": ["博思智合", "深圳分公司", "吉林分公司", "未知分公司"]}
+    )
     result = add_engineer_column(df, config)
     assert result.loc[0, "体系工程师"] == "黄迪"
     assert result.loc[1, "体系工程师"] == "梁通"
-    assert result.loc[2, "体系工程师"] == ""
+    assert result.loc[2, "体系工程师"] == "梁通"
+    assert result.loc[3, "体系工程师"] == ""
 
 
 def test_parse_number_series():
@@ -37,6 +40,15 @@ def test_parse_number_series():
     result = parse_number_series(series)
     expected = pd.Series([1000.0, 1000.0, 0.25, 0.0, 0.0])
     pd.testing.assert_series_equal(result, expected)
+
+
+def test_parse_number_series_rejects_nonempty_invalid_value():
+    with pytest.raises(ValueError, match=r"产品金额.*第 4 行.*bad"):
+        parse_number_series(
+            pd.Series(["1", "", "bad"]),
+            field_name="产品金额",
+            row_offset=2,
+        )
 
 
 def test_build_old_shared_amount(config):

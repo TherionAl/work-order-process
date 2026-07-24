@@ -60,7 +60,8 @@ def add_statistical_allocation_columns(
         errors="coerce",
     )
     product_amount = parse_number_series(
-        result.get("产品金额", pd.Series("", index=result.index))
+        result.get("产品金额", pd.Series("", index=result.index)),
+        field_name="产品金额",
     )
     contract_days = (service_end - service_start).dt.days.add(1).fillna(0)
 

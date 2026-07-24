@@ -23,39 +23,6 @@ logger = logging.getLogger(__name__)
 
 BASELINE_SALES_PLATFORM_CREATE_DATE = "20260713"
 SALES_PLATFORM_BASELINE_KEY_COLUMNS = ("contract_id", "item_code", "exec_detail_id")
-SYSTEM_ENGINEER_BY_SALES_PLATFORM = {
-    "博思智合": "黄迪",
-    "广东瑞联": "黄迪",
-    "广西分公司": "黄迪",
-    "贵州分公司": "黄迪",
-    "河北分公司": "黄迪",
-    "深圳分公司": "梁通",
-    "西藏分公司": "黄迪",
-    "北京分公司": "黄微",
-    "山西分公司": "黄微",
-    "四川分公司": "黄微",
-    "苏皖分公司": "黄微",
-    "总部大区": "黄微",
-    "黑龙江博思": "李金艳",
-    "湖南分公司": "李金艳",
-    "江西分公司": "李金艳",
-    "辽宁分公司": "李金艳",
-    "厦门分公司": "李金艳",
-    "山东分公司": "李金艳",
-    "甘肃分公司": "苏远星",
-    "湖北博思": "苏远星",
-    "吉林分公司": "梁通",
-    "青海分公司": "苏远星",
-    "陕西分公司": "苏远星",
-    "中央": "苏远星",
-    "重庆分公司": "苏远星",
-    "内蒙古金财": "庄明霞",
-    "宁夏分公司": "庄明霞",
-    "上海分公司": "庄明霞",
-    "天津分公司": "庄明霞",
-    "新疆分公司": "庄明霞",
-}
-
 # Backward-compatible public alias for the historical 69-column contract.
 COLUMN_MAP = LEGACY_ERP_COLUMN_MAP
 IMPORT_COLUMN_MAP = STANDARD_ERP_COLUMN_MAP
@@ -265,9 +232,13 @@ def load_sales_platform_baseline(cursor: Any, create_date: str = BASELINE_SALES_
 
 def apply_sales_platform_system_engineer(
     row: dict[str, Any],
-    mapping: SystemEngineerMapping = SYSTEM_ENGINEER_BY_SALES_PLATFORM,
+    mapping: SystemEngineerMapping | None = None,
 ) -> bool:
-    """Set system_engineer from the final sales_platform fixed mapping."""
+    """Set system_engineer from the configured final sales_platform mapping."""
+    if mapping is None:
+        from .erp_merge.config import load_config
+
+        mapping = load_config()["体系工程师"]
     sales_platform = row.get("sales_platform")
     if not sales_platform or sales_platform not in mapping:
         return False
@@ -311,6 +282,9 @@ def _import_erp_records(
     try:
         with conn.cursor() as cursor:
             sales_platform_baseline = load_sales_platform_baseline(cursor)
+            from .erp_merge.config import load_config
+
+            system_engineer_mapping = load_config()["体系工程师"]
             logger.info(
                 "已加载 %s 行 %s 营销平台基准",
                 len(sales_platform_baseline),
@@ -335,7 +309,10 @@ def _import_erp_records(
                 else:
                     new_sales_platform += 1
 
-                if apply_sales_platform_system_engineer(db_row):
+                if apply_sales_platform_system_engineer(
+                    db_row,
+                    system_engineer_mapping,
+                ):
                     applied_system_engineer_mapping += 1
                 else:
                     kept_excel_system_engineer += 1

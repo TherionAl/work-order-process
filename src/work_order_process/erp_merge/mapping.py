@@ -18,6 +18,10 @@ TEXT_FIELDS = ["免费运维期（月）", "其他业务类型", "无效合同�
 EXTRA_OLD_TEXT_COLUMNS = ["其他业务类型", "无效合同类型"]
 
 
+class InvalidNumericValue(ValueError):
+    """Raised when a non-empty numeric source value cannot be parsed."""
+
+
 def normalize_text(series: pd.Series) -> pd.Series:
     return series.fillna("").astype(str).str.strip()
 
@@ -41,7 +45,12 @@ def add_engineer_column(df: pd.DataFrame, config: dict) -> pd.DataFrame:
     return result
 
 
-def parse_number_series(series: pd.Series) -> pd.Series:
+def parse_number_series(
+    series: pd.Series,
+    *,
+    field_name: str = "",
+    row_offset: int = 2,
+) -> pd.Series:
     """将金额或比例列转换为数值，兼容千分位逗号、百分号和空值"""
     text_values = series.fillna("").astype(str).str.strip()
     numeric_text = (
@@ -50,8 +59,19 @@ def parse_number_series(series: pd.Series) -> pd.Series:
         .str.rstrip("%")
     )
     numbers = pd.to_numeric(
-        numeric_text.replace("/", ""), errors="coerce"
-    ).fillna(0.0).astype("float64")
+        numeric_text.replace({"/": pd.NA, "": pd.NA}), errors="coerce"
+    )
+    invalid = text_values.ne("") & text_values.ne("/") & numbers.isna()
+    if invalid.any():
+        position = next(
+            index for index, is_invalid in enumerate(invalid.tolist()) if is_invalid
+        )
+        source_value = text_values.iloc[position]
+        raise InvalidNumericValue(
+            f"{field_name or '数值字段'}第 {position + row_offset} 行无法解析: "
+            f"{source_value!r}"
+        )
+    numbers = numbers.fillna(0.0).astype("float64")
     percent_mask = text_values.str.endswith("%")
     numbers.loc[percent_mask] = numbers.loc[percent_mask] / 100
     return numbers
@@ -59,10 +79,14 @@ def parse_number_series(series: pd.Series) -> pd.Series:
 
 def build_old_shared_amount(old_df: pd.DataFrame, source_column: str, config: dict) -> pd.Series:
     """旧ERP指定金额字段按分成比例折算后导入"""
-    amount = parse_number_series(old_df.get(source_column, pd.Series("", index=old_df.index)))
+    amount = parse_number_series(
+        old_df.get(source_column, pd.Series("", index=old_df.index)),
+        field_name=source_column,
+    )
     share_ratio_col = config["金额换算"]["乘数因子字段"]
     share_ratio = parse_number_series(
-        old_df.get(share_ratio_col, pd.Series("", index=old_df.index))
+        old_df.get(share_ratio_col, pd.Series("", index=old_df.index)),
+        field_name=share_ratio_col,
     )
     return amount * share_ratio
 
@@ -176,7 +200,10 @@ def normalize_money_columns(df: pd.DataFrame) -> pd.DataFrame:
     result = df.copy()
     for column in result.columns:
         if MONEY_PATTERN.search(column):
-            result[column] = parse_number_series(result[column])
+            result[column] = parse_number_series(
+                result[column],
+                field_name=column,
+            )
     return result
 
 

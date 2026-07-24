@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from work_order_process.erp_merge.config import load_config
 from work_order_process.customer_account_import import (
     COLUMN_MAP as CUSTOMER_ACCOUNT_COLUMN_MAP,
     convert as convert_customer_account,
@@ -100,7 +101,10 @@ def test_erp_import_maps_system_engineer_after_baseline_sales_platform() -> None
     }
 
     apply_baseline_sales_platform(row, baseline)
-    apply_sales_platform_system_engineer(row)
+    apply_sales_platform_system_engineer(
+        row,
+        load_config()["体系工程师"],
+    )
 
     assert row["sales_platform"] == "吉林分公司"
     assert row["system_engineer"] == "梁通"
