@@ -93,3 +93,17 @@ def test_handover_guide_indexes_all_source_symbols() -> None:
 def test_readme_links_handover_guide() -> None:
     text = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     assert "[项目接手手册](docs/project_handover_guide.md)" in text
+
+
+def test_handover_guide_local_links_exist() -> None:
+    links = re.findall(r"\[[^\]]+\]\(([^)]+)\)", _guide_text())
+    local_links = [
+        link.split("#", maxsplit=1)[0]
+        for link in links
+        if not link.startswith(("http://", "https://", "#"))
+    ]
+    assert local_links
+    missing = sorted(
+        link for link in local_links if not (GUIDE_PATH.parent / link).exists()
+    )
+    assert not missing, missing
