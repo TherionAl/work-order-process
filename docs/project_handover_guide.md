@@ -1296,20 +1296,721 @@ ERP 发布总控：
 - `work_order_process.daily_runner.main`：注册任务、信号和启动调度器。
 ## 7. 数据库与业务流程
 
-本章在模块索引后详细说明数据库、ERP、台账和营收操作。
+### 7.1 数据域和表
+
+| 数据域 | 表或视图 | 主键/粒度 | 用途 |
+|---|---|---|---|
+| 工单 | `ticket_detail_main` | `(ticket_id, create_dt)` | 工单核心字段和分析维度 |
+| 工单 | `ticket_detail_custom_fields` | `(id, create_dt)` | 动态自定义字段 EAV |
+| 客户 | `customers` | `customer_id` | 当前客户 |
+| 客户 | `customer_history` | `(customer_id, version_no)` | 客户历史 |
+| 联系人 | `contacts` | `contact_id` | 当前联系人 |
+| 联系人 | `contact_history` | `(contact_id, version_no)` | 联系人历史 |
+| 关系 | `customer_contact_relation_history` | `(contact_id, version_no)` | 联系人客户关系历史 |
+| API 审计 | `api_sync_batch` | `sync_batch_id` | 客户联系人批次 |
+| API 审计 | `api_raw_record` | `id` | 原始接口记录 |
+| 任务 | `sync_task_log` | `id` | 工单等任务结果 |
+| 人员 | `personnel` | `employee_no` | 人员花名册 |
+| 台账 | `customer_account` | `(id, create_date)` | 台账快照 |
+| ERP | `erp_data` | `(id, create_date)` | ERP 快照 |
+| 营收 | `ops_service_revenue_monthly` | `(stat_year, stat_month, sales_platform)` | 月度平台指标 |
+| 视图 | `v_customer_service_overview` | 客户版本 | 客户工单汇总 |
+| 视图 | `v_contact_service_overview` | 联系人版本 | 联系人工单汇总 |
+| 视图 | `v_customer_data_quality` | 一行 | 关联质量 |
+| 视图 | `v_ops_service_revenue_monthly_with_total` | 平台/合计 | 营收展示 |
+
+完整字段、索引和 SQL 见
+[work_order_datalake 数据库设计与使用说明](database_usage.md)。
+
+### 7.2 为什么主键这样设计
+
+`ticket_detail_main` 和 `ticket_detail_custom_fields` 按 `create_dt` 分区。MySQL 要求分区
+表的所有唯一键包含分区列，因此主键不只使用 `ticket_id`。只按 `ticket_id` 查询不会
+漏数据，但无法充分裁剪时间分区；已知时间范围时应带 `create_dt`。
+
+`erp_data` 和 `customer_account` 按 `create_date` 快照分区。自增 `id` 只是物理行标识，
+查询和汇总必须指定快照日期，否则同一业务在多个快照中会重复。ERP 另有唯一键：
+
+```text
+contract_id + item_code + exec_detail_id + create_date
+```
+
+台账未使用同样严格唯一键，因为源数据中存在业务上需要进一步确认的重复。
+
+营收表的自然粒度就是：
+
+```text
+统计年 + 统计月 + 营销平台
+```
+
+同月重算是完整替换，防止旧平台残留。
+
+### 7.3 逻辑关联
+
+```mermaid
+erDiagram
+    CUSTOMERS ||--o{ CONTACTS : "customer_id 客户ID"
+    CUSTOMERS ||--o{ TICKET_DETAIL_MAIN : "customer_id = company_id"
+    CONTACTS ||--o{ TICKET_DETAIL_MAIN : "contact_id = cust_user_id"
+    TICKET_DETAIL_MAIN ||--o{ TICKET_DETAIL_CUSTOM_FIELDS : "ticket_id + create_dt"
+    CUSTOMERS ||--o{ CUSTOMER_HISTORY : "customer_id"
+    CONTACTS ||--o{ CONTACT_HISTORY : "contact_id"
+    CUSTOMER_ACCOUNT }o--o{ ERP_DATA : "contract_code = contract_id + item_code"
+    ERP_DATA ||--o{ OPS_SERVICE_REVENUE_MONTHLY : "create_date = erp_create_date"
+```
+
+优先使用 ID 和业务键。客户名称、项目名称等模糊关联只能作为辅助，必须统计未匹配和
+一对多，不能静默取第一条。
+
+### 7.4 快照查询规则
+
+错误：
+
+```sql
+SELECT SUM(product_amount) FROM erp_data;
+```
+
+该语句会把所有日期快照累加。正确方式：
+
+```sql
+SELECT sales_platform, ROUND(SUM(product_amount), 0) AS product_amount
+FROM erp_data
+WHERE create_date = '20260717'
+GROUP BY sales_platform
+ORDER BY sales_platform;
+```
+
+查询可用快照：
+
+```sql
+SELECT create_date, COUNT(*) AS row_count,
+       MIN(imported_at) AS first_imported_at,
+       MAX(imported_at) AS last_imported_at
+FROM erp_data
+GROUP BY create_date
+ORDER BY create_date DESC;
+```
+
+台账同理：
+
+```sql
+SELECT create_date, COUNT(*) AS row_count
+FROM customer_account
+GROUP BY create_date
+ORDER BY create_date DESC;
+```
+
+### 7.5 ERP 九个分摊字段
+
+| 字段 | 中文含义 |
+|---|---|
+| `contract_days` | 合同服务期含首尾总天数 |
+| `prev_year_period_start` | 去年统计开始 |
+| `prev_year_period_end` | 去年统计结束 |
+| `prev_year_calc_amort` | 去年按重叠天数初算分摊 |
+| `prev_year_adjusted_amort` | 去年倒签调整后分摊 |
+| `cur_year_period_start` | 今年统计开始 |
+| `cur_year_period_end` | 今年统计结束 |
+| `cur_year_calc_amort` | 今年按重叠天数初算分摊 |
+| `cur_year_adjusted_amort` | 今年倒签调整后分摊 |
+
+初算：
+
+```text
+合同天数 = 运维结束日期 - 运维开始日期 + 1
+重叠开始 = max(运维开始日期, 统计开始日期)
+重叠结束 = min(运维结束日期, 统计结束日期)
+重叠天数 = max(重叠结束 - 重叠开始 + 1, 0)
+按期分摊 = 产品金额 × 重叠天数 ÷ 合同天数
+```
+
+倒签调整：
+
+```text
+今年调整后 = 今年初算 + 应从去年转入今年的倒签金额
+去年调整后 = 去年初算 - 已转入今年的倒签金额
+```
+
+修改此规则时必须同时核对 Excel 公式、`calculator.py`、ERP 测试、营收在手合同额和
+专题文档，不能只改某一列。
+
+快照质量 SQL：
+
+```sql
+SELECT
+    create_date,
+    COUNT(*) AS row_count,
+    COUNT(DISTINCT contract_id, item_code, exec_detail_id) AS unique_row_count,
+    SUM(contract_days IS NULL) AS contract_days_null,
+    SUM(prev_year_adjusted_amort IS NULL) AS prev_adjusted_null,
+    SUM(cur_year_adjusted_amort IS NULL) AS cur_adjusted_null
+FROM erp_data
+WHERE create_date = '20260717'
+GROUP BY create_date;
+```
+
+重复业务键：
+
+```sql
+SELECT contract_id, item_code, exec_detail_id, create_date, COUNT(*) AS n
+FROM erp_data
+WHERE create_date = '20260717'
+GROUP BY contract_id, item_code, exec_detail_id, create_date
+HAVING COUNT(*) > 1;
+```
+
+### 7.6 营收四组指标
+
+基础有效条件：
+
+```text
+is_public_cloud = 否
+contract_category = 运维合同
+other_business_type = 非税票据
+invalid_contract_type = 有效
+```
+
+| 组 | 当前值 | 去年同期 | 是否排除暂估 |
+|---|---|---|---|
+| 收入目标/确收 | `revenue_target`、`recognized_revenue` | 无 | 确收完成值不排除 |
+| 确收及同期 | `recognized_revenue_excluding_estimate` | `prior_year_recognized_revenue` | 是 |
+| 在手合同及同期 | `contracts_on_hand_amount` | `prior_year_contracts_on_hand_amount` | 是 |
+| 签约合同及同期 | `signing_completed_amount` | `prior_year_signing_amount` | 是 |
+
+在手合同当前只汇总 `cur_year_adjusted_amort`，去年同期只汇总
+`prev_year_adjusted_amort`。签约合同按申请日期区间汇总 `product_amount`。收入目标只
+来自目标文件；未配置目标的平台不会成为输出明细行，但报告会列出 ERP 有指标而目标
+缺失的平台。
+
+金额保留整数，完成率和同比率保留六位小数；分母为零时率为 `NULL`，不是零。
+
+查询营收：
+
+```sql
+SELECT *
+FROM ops_service_revenue_monthly
+WHERE stat_year = 2026 AND stat_month = 6
+ORDER BY sales_platform;
+```
+
+带合计：
+
+```sql
+SELECT *
+FROM v_ops_service_revenue_monthly_with_total
+WHERE stat_year = 2026 AND stat_month = 6
+ORDER BY sort_order, sales_platform;
+```
+
+核对是否引用预期 ERP 快照：
+
+```sql
+SELECT erp_create_date, COUNT(*) AS platform_count
+FROM ops_service_revenue_monthly
+WHERE stat_year = 2026 AND stat_month = 6
+GROUP BY erp_create_date;
+```
+
+### 7.7 常用工单查询
+
+月度工单数：
+
+```sql
+SELECT create_month_label, COUNT(*) AS ticket_count
+FROM ticket_detail_main
+WHERE create_dt >= '2026-01-01'
+  AND create_dt < '2027-01-01'
+GROUP BY create_month_label
+ORDER BY create_month_label;
+```
+
+工单、客户和联系人：
+
+```sql
+SELECT
+    t.ticket_id,
+    t.subject,
+    c.customer_name,
+    p.contact_name,
+    t.create_dt,
+    t.ticket_status
+FROM ticket_detail_main AS t
+LEFT JOIN customers AS c ON c.customer_id = t.company_id
+LEFT JOIN contacts AS p ON p.contact_id = t.cust_user_id
+WHERE t.create_dt >= '2026-06-01'
+  AND t.create_dt < '2026-07-01';
+```
+
+最近失败任务：
+
+```sql
+SELECT id, task_type, target_month_label, status,
+       total_count, success_count, failed_count, skipped_count,
+       error_message, created_at
+FROM sync_task_log
+WHERE status <> 'success'
+ORDER BY id DESC
+LIMIT 50;
+```
+
+### 7.8 台账和 ERP 关联
+
+```sql
+SELECT
+    a.create_date,
+    a.contract_code,
+    a.item_code,
+    a.final_user_customer,
+    e.contract_id,
+    e.product_amount,
+    e.cur_year_adjusted_amort,
+    e.sales_platform
+FROM customer_account AS a
+LEFT JOIN erp_data AS e
+  ON e.contract_id = a.contract_code
+ AND e.item_code = a.item_code
+ AND e.create_date = a.create_date
+WHERE a.create_date = '20260717';
+```
+
+如果两个数据源不是同日快照，应由业务明确选择日期后分别过滤，不能删除日期条件形成
+跨快照笛卡尔式重复。
 
 ## 8. 开发与测试
 
-本章说明修改、测试、提交和 CI。
+### 8.1 推荐修改流程
+
+1. `git status --short`，识别用户已有改动和未跟踪业务文件。
+2. 阅读目标模块、对应测试和专题文档。
+3. 先写能复现问题的测试。
+4. 运行目标测试确认失败原因正确。
+5. 小范围修改实现。
+6. 运行目标测试、相关模块测试和完整测试。
+7. 执行编译、锁文件、差异和凭据检查。
+8. 只暂存本任务文件，检查 staged diff 后提交。
+
+不要使用 `git reset --hard`、`git checkout --` 或删除不属于本任务的用户文件。
+
+### 8.2 常用开发命令
+
+```powershell
+# 精确安装所有锁定依赖
+uv sync --all-groups --locked
+
+# 确认 pyproject 和锁文件一致
+uv lock --check
+
+# 单文件
+uv run --all-groups pytest tests/test_revenue_summary.py -q
+
+# 单测试
+uv run --all-groups pytest `
+  tests/test_erp_import.py::test_import_rejects_nonempty_invalid_amount_with_field_and_row -q
+
+# 完整测试
+uv run --all-groups pytest -q
+
+# 编译检查
+uv run --all-groups python -m compileall -q src merge_erp_data.py main.py
+
+# 空白和冲突标记检查
+git diff --check
+git diff --cached --check
+```
+
+### 8.3 测试与模块对应
+
+| 测试 | 主要覆盖 |
+|---|---|
+| `test_api.py` | HTTP、分页和异常 JSON |
+| `test_config.py` | 环境变量和凭据 |
+| `test_dictionary.py` | PDF 字典 |
+| `test_monthly_export.py` | 月度 JSON 和抽样 |
+| `test_resolver.py` | ID、枚举和维度解析 |
+| `test_mysql_storage.py` | 工单 DDL、事务和导入 |
+| `test_customer_contact_sync.py` | 当前/历史实体同步 |
+| `test_personnel_import.py` | 人员 `.xls` |
+| `test_snapshot_imports.py` | ERP/台账表结构和快照 |
+| `test_erp_import.py` | ERP 原子发布和校验 |
+| `tests/erp_merge/*` | ERP 配置、映射、合并和分摊 |
+| `test_revenue_summary.py` | 营收口径、写库和 Excel |
+| `test_time_metrics.py`、`test_business_time.py` | 工作时长 |
+| `test_daily_runner.py` | 跨年月份和失败传播 |
+| `test_deploy_assets.py` | systemd、日志和备份模板 |
+| `test_repository_security.py` | 凭据、链接和 CI |
+| `test_handover_guide.py` | 本手册命令、模块和函数覆盖 |
+
+### 8.4 CI
+
+`.github/workflows/test.yml` 在 push 和 pull request 时：
+
+1. checkout 仓库。
+2. 安装 Python 3.14 和 uv。
+3. `uv lock --check`。
+4. `uv sync --all-groups --locked`。
+5. 单独运行仓库安全测试。
+6. 运行完整 pytest。
+
+本地通过不代表 GitHub 一定通过，需检查 Linux 大小写、路径、shell 和依赖安装差异。
+
+### 8.5 修改规则时至少跑什么
+
+| 修改范围 | 最小验证 |
+|---|---|
+| API | `test_api.py test_monthly_export.py test_mysql_storage.py` |
+| 工单字段 | `test_resolver.py test_structured_ticket.py test_mysql_storage.py` |
+| 客户联系人 | `test_structured_entities.py test_customer_contact_sync.py` |
+| ERP 规则 | `tests/erp_merge tests/test_erp_import.py tests/test_erp_schema.py` |
+| ERP 表结构 | 上述测试加 `test_erp_migrations.py test_snapshot_imports.py` |
+| 营收 | `test_revenue_summary.py` 加 ERP 相关测试 |
+| 调度 | `test_daily_runner.py test_deploy_assets.py` |
+| CLI/模块 | `test_handover_guide.py` 并更新本文 |
+
+最终仍应运行完整测试。
 
 ## 9. 生产运行
 
-本章说明调度、服务、日志、备份、发布和回滚。
+### 9.1 生产文件
+
+| 文件 | 安装目标/作用 |
+|---|---|
+| `deploy/work-order-daily.service` | systemd 常驻调度器 |
+| `deploy/work-order-daily.logrotate` | 每日日志轮转，保留 14 份 |
+| `deploy/work-order-backup.service` | 单次 MySQL 备份 |
+| `deploy/work-order-backup.timer` | 每天 01:00 备份 |
+| `deploy/mysql-backup.cnf.example` | 备份账号配置示例 |
+| `scripts/backup_mysql.sh` | mysqldump、gzip、保留期清理 |
+
+正式操作步骤详见 [生产运行说明](production_operations.md)。仓库文件只是模板，不会
+自动修改服务器。
+
+### 9.2 权限原则
+
+- Linux 运行用户和组：`workorder`。
+- 应用 MySQL 用户不是 root，只授予业务 DML 和必要查询权限。
+- DDL/分区维护和备份账号分开授权。
+- `/etc/work-order-process/work-order.env` 和 `mysql-backup.cnf` 权限 `0600`。
+- 配置和备份目录权限 `0700`。
+- 日志和输出目录由 `workorder` 可写。
+
+### 9.3 部署前检查
+
+```bash
+cd /opt/work_order_process
+git status --short
+git rev-parse HEAD
+systemctl status work-order-daily.service --no-pager
+ps -ef | grep -F work_order_process.daily_runner
+```
+
+还要确认：
+
+- 当前数据库和备份可用。
+- `.env` 未被 Git 覆盖。
+- 将部署的提交已经通过 CI。
+- `.venv` 使用 Python 3.14。
+- 只有一个调度器进程。
+
+### 9.4 部署模板
+
+以下只是经审批后的操作顺序，不应在不确认服务器状态时照抄执行：
+
+```bash
+cd /opt/work_order_process
+git fetch --all --prune
+git status --short
+git pull --ff-only
+uv sync --all-groups --locked
+uv lock --check
+uv run --all-groups pytest -q
+sudo systemctl restart work-order-daily.service
+sudo systemctl is-active work-order-daily.service
+sudo systemctl status work-order-daily.service --no-pager
+```
+
+必须保证本地、远程仓库和服务器指向同一提交。
+
+### 9.5 发布后只读验收
+
+```bash
+journalctl -u work-order-daily.service -n 100 --no-pager
+systemctl list-timers work-order-backup.timer --no-pager
+```
+
+数据库检查：
+
+```sql
+SELECT id, task_type, target_month_label, status,
+       success_count, failed_count, created_at
+FROM sync_task_log
+ORDER BY id DESC
+LIMIT 20;
+```
+
+不要只依据“Scheduler started”判断数据成功；它只证明调度器进程启动。
+
+### 9.6 日志
+
+应用把 `httpx` 降到 WARNING，常规日志只记录任务摘要。默认文件：
+
+```text
+/var/log/work-order-process/daily_runner.log
+```
+
+logrotate 每日轮转、压缩并保留 14 份。排障时同时看文件日志和 systemd journal。
+
+### 9.7 备份
+
+备份脚本从 `/etc/work-order-process/mysql-backup.cnf` 读取凭据，避免密码出现在进程参数。
+默认写入 `/var/backups/work-order-process`，保留 14 天。
+
+检查：
+
+```bash
+systemctl status work-order-backup.service --no-pager
+gzip -t /var/backups/work-order-process/work_order_datalake_*.sql.gz
+```
+
+`gzip -t` 只证明压缩文件未损坏。必须定期恢复到隔离数据库，核对表数、关键行数和查询。
+
+### 9.8 回滚原则
+
+代码回滚：
+
+1. 记录当前失败提交和日志。
+2. 选择已验证提交。
+3. 使用正常 Git 提交/部署流程切回，不清空工作树。
+4. 同步锁定依赖并重启。
+5. 执行只读验收。
+
+数据回滚不能简单依赖代码回滚。ERP 同日发布会替换快照，营收会替换整月；恢复数据前
+必须确认备份、目标日期和影响范围。
 
 ## 10. 故障排查
 
-本章按症状提供定位顺序。
+### 10.1 通用定位顺序
+
+1. 记录完整命令、时间、退出码和错误第一现场。
+2. `git rev-parse HEAD` 确认代码版本。
+3. `git status --short` 确认是否有本地修改。
+4. 确认 `.env`、目标文件和目标日期。
+5. 运行最小只读测试或单条命令复现。
+6. 查 `sync_task_log`、数据库行数和日志。
+7. 只有证据指向代码错误时才修改代码。
+
+### 10.2 配置错误或中文乱码
+
+症状：
+
+```text
+缺少接口认证凭据
+配置错误
+中文显示为问号
+```
+
+检查：
+
+- `.env` 是否位于项目根目录。
+- 变量名是否与 `.env.example` 完全一致。
+- 文件是否 UTF-8。
+- PowerShell 可设置 `PYTHONIOENCODING=utf-8`，但代码已主动重配置 stdout/stderr。
+- 不要把 Word 或终端显示乱码误判为数据库数据损坏，先用 UTF-8 工具读取原文件。
+
+### 10.3 API 401、403、404 或 500
+
+顺序：
+
+1. `probe` 验证认证。
+2. `mysql-probe-customers` / `mysql-probe-contacts` 验证实体路径。
+3. 核对 base URL 是否重复 `/api/v1`。
+4. 核对候选路径和方法。
+5. 降低 `--per-page`、并发和 QPS。
+6. 对失败工单单独调用 `mysql-import-ticket`。
+
+401/403 通常是凭据或权限；404 多为路径；500 可能是分页过大或服务端数据问题。
+
+### 10.4 JSONDecodeError / Invalid escape
+
+接口历史数据可能包含裸反斜杠。当前 `_repair_invalid_json_escapes()` 会在严格
+`json.loads` 前修复不合法转义。若仍失败：
+
+- 保存安全脱敏后的 ticket ID 和错误位置。
+- 不在日志贴完整客户描述。
+- 用单工单路径复现。
+- 为具体反斜杠序列增加回归测试。
+
+### 10.5 MySQL 连接或权限错误
+
+检查：
+
+```powershell
+Test-NetConnection -ComputerName <mysql-host> -Port 3306
+```
+
+数据库中检查当前身份：
+
+```sql
+SELECT CURRENT_USER(), DATABASE(), VERSION();
+SHOW GRANTS FOR CURRENT_USER();
+```
+
+常见原因：连错库、端口被防火墙拦截、应用账号缺 DML、分区维护缺 ALTER、备份账号缺
+必要读取权限。不要因为权限不足就长期改用 root。
+
+### 10.6 工单月份数据不完整
+
+检查：
+
+```sql
+SELECT create_month_label, COUNT(*)
+FROM ticket_detail_main
+WHERE create_month_label = '2026-06'
+GROUP BY create_month_label;
+```
+
+再查同月份 `sync_task_log`。区分：
+
+- skipped：数据库已有相同 `source_updated_at`，通常不是失败。
+- failed：详情拉取、解析或写入失败。
+- 工具超时：后台进程可能仍在运行，需要查进程和数据库。
+- `--limit-per-month`：调试参数会故意只导入部分。
+
+### 10.7 Excel 找不到标准表
+
+ERP 导入按首行完整表头集合识别，要求恰好 69 或 78 个不重复表头。检查：
+
+- 是否误用了文档版 Excel。
+- 首行是否中文表头。
+- 是否有重复、空列、手工改名或额外列。
+- 公式是否已经由 Excel 计算并保存；`data_only=True` 只能读取缓存结果。
+- 新旧原始文件应使用 `erp-merge`，不要直接用 `import-erp`。
+
+### 10.8 ERP 金额或日期错误
+
+非空金额文本会报中文字段、英文字段、来源和行号。不要把错误文本改成零绕过：
+
+1. 回到源 Excel 核对该单元格和公式。
+2. 判断是占位 `/`、真正空值还是业务数据错误。
+3. 修正源文件或明确清洗规则。
+4. 重跑预处理和相关测试。
+
+日期解析失败可能导致可选日期为空；九个分摊字段和业务键为空会阻止 78 列快照发布。
+
+### 10.9 ERP 数据库仍是旧数据
+
+检查：
+
+```sql
+SELECT create_date, COUNT(*), MAX(imported_at)
+FROM erp_data
+GROUP BY create_date
+ORDER BY create_date DESC;
+```
+
+再核对命令报告中的 `published_rows` 和 `replaced_rows`。临时表失败不会修改正式快照；
+这是保护行为，不是“部分导入”。
+
+### 10.10 营收为空、全零或与 Excel 不一致
+
+检查顺序：
+
+1. 命令中的 `--year`、`--month`、`--erp-create-date`。
+2. 目标文件是否包含该年月和平台目标。
+3. ERP 快照九列是否有 NULL。
+4. 基础有效条件字段值是否完全一致。
+5. 平台是否存在映射差异或空格。
+6. 是否使用了预览文件而未正式写库。
+7. 数据库月度平台集合和 Excel 平台集合是否相同。
+
+代码会拒绝全空指标，但业务筛选错误仍可能使部分平台为零，应从 ERP 明细按条件拆解。
+
+### 10.11 定时任务显示成功但数据失败
+
+APScheduler 的“任务触发/执行”与业务导入成功不是同一层。检查：
+
+- 日志是否有 `ScheduledSyncError`。
+- 报告中的 `failed` 是否大于零。
+- `sync_task_log.status`。
+- systemd 进程是否仍 active。
+- 同一服务是否启动了多个调度器。
+
+### 10.12 备份文件存在但无法恢复
+
+可能原因：mysqldump 中途失败、账号缺对象权限、磁盘满、只有部分库、压缩通过但 SQL
+逻辑不完整。必须在隔离实例执行真实恢复。恢复演练失败时先保留原备份和日志，不运行
+保留期清理。
 
 ## 11. 维护检查表
 
-本章说明代码变化后需要同步更新的手册内容。
+### 11.1 代码到文档矩阵
+
+| 修改位置 | 必须检查的手册内容 |
+|---|---|
+| `pyproject.toml` | Python、依赖组、控制台入口 |
+| `.env.example`、`config.py` | 环境变量表 |
+| `cli.py`、`erp_merge/cli.py` | 命令、参数、风险和示例 |
+| `api.py` | API 方法、认证和排障 |
+| `monthly_export.py` | 输出目录、抽样和复用规则 |
+| `resolver.py`、`structured_ticket.py` | 字段解析和数据库映射 |
+| `mysql_storage.py` | 表、事务、分区和同步日志 |
+| `structured_entities.py`、`customer_contact_sync.py` | 客户联系人流 |
+| `erp_merge/*` | ERP 规则、分摊和函数索引 |
+| `erp_import.py`、`erp_schema.py` | 标准列、校验和快照发布 |
+| `revenue_summary.py` | 四组指标、金额和整月替换 |
+| `daily_runner.py`、`deploy/*` | 定时、服务、日志和备份 |
+| `sql/*.sql` | 表、字段、主键、索引和查询 |
+
+`tests/test_handover_guide.py` 会自动检查全部 CLI 命令、Python 模块、顶层类和函数是否
+出现在本文；测试失败时应补真实说明，不要只把名称堆进隐藏段落。
+
+### 11.2 提交前检查
+
+```powershell
+uv sync --all-groups --locked
+uv lock --check
+uv run --all-groups pytest -q
+uv run --all-groups python -m compileall -q src merge_erp_data.py main.py
+git diff --check
+git status --short
+```
+
+人工检查：
+
+- 没有真实凭据、手机号或客户明细。
+- 没有把临时生产数据量写成固定事实。
+- 命令示例使用占位路径。
+- 写库和危险命令有风险说明。
+- 所有相对链接存在。
+- `data/` 和 `output/` 未进入提交。
+
+### 11.3 新接手人员检查表
+
+第一天：
+
+- [ ] 阅读本文第 1-5 章。
+- [ ] 确认 Python、uv、Git 和工作目录。
+- [ ] 复制 `.env.example`，但不提交 `.env`。
+- [ ] 完整测试通过。
+- [ ] 查看两个 CLI 帮助。
+- [ ] 只读确认数据库版本、库名和当前用户。
+- [ ] 记录本地、远程和生产提交，不执行部署。
+
+第一周：
+
+- [ ] 用 `probe` 验证 API。
+- [ ] 用一张测试工单走通解析。
+- [ ] 阅读 [API 数据解析和字段映射说明](api_data_resolution_mapping.md)。
+- [ ] 阅读 [数据库设计与使用说明](database_usage.md)。
+- [ ] 用只读 SQL 理解快照、分区和月度行数。
+- [ ] 用历史/测试文件在非生产环境生成 ERP 标准数据。
+- [ ] 使用 `--revenue-preview` 理解营收结果。
+- [ ] 阅读 [生产运行说明](production_operations.md)，确认备份和恢复责任人。
+
+独立发布前：
+
+- [ ] 能解释 ERP 同日替换和营收整月替换。
+- [ ] 能区分 skipped、failed 和工具超时。
+- [ ] 能从 `sync_task_log` 与日志定位失败。
+- [ ] 知道哪些操作需要明确审批。
+- [ ] 完成一次非生产恢复演练。
+- [ ] 有经过确认的发布和回滚步骤。

@@ -215,6 +215,7 @@ output/mysql_import_logs/YYYY-MM_failed.json
 
 ## 项目文档
 
+- [项目接手手册](docs/project_handover_guide.md)
 - [数据库设计与使用说明](docs/database_usage.md)
 - [ERP 合并与分摊字段说明](docs/erp_merge/标准Sheet1与分摊字段说明.md)
 - [工单 API 数据解析映射](docs/api_data_resolution_mapping.md)
