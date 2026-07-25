@@ -9,7 +9,7 @@
 
 本项目把三类业务数据归集到 MySQL 数据库 `work_order_datalake`：
 
-1. **工单域**：从“帮我吧”API 获取工单、客户和联系人，解析 ID、枚举和自定义字段，
+1. **工单域**：从工单 API 获取工单、客户和联系人，解析 ID、枚举和自定义字段，
    保存 JSON 或写入 MySQL。
 2. **经营域**：将新旧 ERP Excel 合并为统一的 78 列标准数据，计算年度分摊后以快照
    方式写入 `erp_data`；将客户台账 Excel 写入 `customer_account`。
@@ -122,7 +122,7 @@ WORKORDER_MYSQL_DATABASE=work_order_datalake
 
 ```mermaid
 flowchart LR
-    API["帮我吧工单 API"] --> CORE["work_order_process"]
+    API["工单 API"] --> CORE["work_order_process"]
     PDF["数据字典 PDF"] --> CORE
     NEWERP["新 ERP Excel"] --> MERGE["erp-merge"]
     OLDERP["旧 ERP Excel"] --> MERGE
@@ -291,7 +291,7 @@ uv sync --all-groups --locked
 |---|---|---|
 | `WORKORDER_USERNAME` | 无，必填 | 工单 API Basic Auth 用户名 |
 | `WORKORDER_PASSWORD` | 无，必填 | 工单 API Basic Auth 密码 |
-| `WORKORDER_BASE_URL` | 帮我吧 API v1 地址 | API 根地址 |
+| `WORKORDER_BASE_URL` | 工单 API v1 地址 | API 根地址 |
 | `WORKORDER_CUSTOMER_PATHS` | 多个候选路径 | 客户接口，逗号分隔 |
 | `WORKORDER_CONTACT_PATHS` | 多个候选路径 | 联系人接口，逗号分隔 |
 | `WORKORDER_TICKET_PATHS` | 多个候选路径 | 工单接口，逗号分隔 |
@@ -699,7 +699,7 @@ uv run --all-groups work_order_process metric-ticket `
 
 | 模块 | 职责 | 主要副作用 |
 |---|---|---|
-| `work_order_process.api` | 帮我吧 API 认证、探测、分页、详情和缓存 | HTTP 请求 |
+| `work_order_process.api` | 工单 API 认证、探测、分页、详情和缓存 | HTTP 请求 |
 | `work_order_process.config` | `.env`、端点和 MySQL 配置 | 读取环境变量 |
 | `work_order_process.cli` | 通用命令路由和终端输出 | 取决于子命令 |
 | `work_order_process.dictionary` | PDF 数据字典解析和中文化 | 读 PDF、写 JSON |
