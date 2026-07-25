@@ -109,7 +109,7 @@ WORKORDER_MYSQL_DATABASE=work_order_datalake
 - `mysql-import-year`：可能产生大量 API 请求和数据库写入。
 - `import-erp`、`erp-merge`：会替换同一 `create_date` 的 ERP 正式快照。
 - `generate-revenue-summary`：不带 `--revenue-preview` 会替换指定年月营收结果。
-- `import-customer-account`：写入台账快照。
+- `import-customer-account`：写入客户台账快照。
 - `mysql-add-partitions`、`mysql-init`：执行 DDL。
 - 修改或启停 systemd、logrotate、备份 timer。
 - 轮换凭据、改 MySQL 权限、重写 Git 历史或强制推送。
@@ -138,7 +138,7 @@ flowchart LR
 
 文字解释：
 
-- `work_order_process` 是通用入口，负责 API、工单数据库、台账、已整理 ERP、营收和
+- `work_order_process` 是通用入口，负责 API、工单数据库、客户台账、已整理 ERP、营收和
   时间指标。
 - `erp-merge` 是原始 ERP 入口，完成新旧 Excel 合并、清洗、分摊、入库和数据库导出。
 - PDF 数据字典用于英文值到中文标签的翻译。
@@ -186,7 +186,7 @@ flowchart LR
 同步使用行哈希判断业务字段是否变化，当前表用于业务查询，history 表保留版本。联系人
 通过 `customer_id` 关联客户；工单通过 `company_id` 和 `cust_user_id` 关联两者。
 
-### 2.4 ERP、台账和营收数据流
+### 2.4 ERP、客户台账和营收数据流
 
 ```mermaid
 flowchart LR
@@ -197,7 +197,7 @@ flowchart LR
     STAGE --> CHECK["日期 / 键 / 行数 / 金额校验"]
     CHECK -->|事务替换| ERP[("erp_data")]
     ERP --> DOC["数据库同版单 Sheet Excel"]
-    ACCOUNT["台账 Excel"] --> CA[("customer_account")]
+    ACCOUNT["客户台账 Excel"] --> CA[("customer_account")]
     TARGET["收入目标"] --> REV["四组营收指标"]
     ERP --> REV
     REV --> RT[("ops_service_revenue_monthly")]
@@ -213,8 +213,8 @@ ERP 正式发布过程：
 5. 在单个事务中删除同日旧快照并插入新快照；失败则回滚。
 6. 从已提交数据库快照导出文档版 Excel。
 
-台账是独立快照。与 ERP 常用逻辑关联为
-`contract_code = contract_id`、`item_code = item_code`，但台账数据允许业务重复，不能
+客户台账是独立快照。与 ERP 常用逻辑关联为
+`contract_code = contract_id`、`item_code = item_code`，但客户台账数据允许业务重复，不能
 未经分析直接增加严格唯一约束。
 
 营收生成先验证 ERP 快照存在且调整后分摊不为空，再按营销平台聚合；正式模式在事务中
@@ -242,7 +242,7 @@ work_order_process/
 ├─ deploy/                          # systemd、logrotate、备份模板
 ├─ docs/                            # 接手手册和专题文档
 ├─ scripts/                         # 运维/导出脚本
-├─ sql/                             # ERP、台账、营收表和视图
+├─ sql/                             # ERP、客户台账、营收表和视图
 ├─ src/work_order_process/          # Python 包
 │  └─ erp_merge/                    # 新旧 ERP 合并子系统
 ├─ tests/                           # pytest，与源码模块对应
@@ -561,7 +561,7 @@ uv run --all-groups work_order_process mysql-import-contacts `
 > CLI 参数帮助文字称客户和联系人默认来源为 both，但当前 `argparse` 实际默认分别为
 > `companies` 和 `contacts`。接手时以代码默认值为准；后续应修正帮助文字。
 
-### 5.7 人员、台账和已整理 ERP
+### 5.7 人员、客户台账和已整理 ERP
 
 #### `mysql-import-personnel`（R2）
 
@@ -577,7 +577,7 @@ Excel 数字工号会规范化为无 `.0` 的字符串。详见
 
 #### `import-customer-account`（R2）
 
-导入台账快照，必须显式指定源文件和 `YYYYMMDD` 快照日期。
+导入客户台账快照，必须显式指定源文件和 `YYYYMMDD` 快照日期。
 
 ```powershell
 uv run --all-groups work_order_process import-customer-account `
@@ -711,8 +711,8 @@ uv run --all-groups work_order_process metric-ticket `
 | `work_order_process.structured_entities` | 客户和联系人标准行 | 纯转换 |
 | `work_order_process.customer_contact_sync` | 当前表、历史表和原始记录同步 | API、MySQL |
 | `work_order_process.personnel_import` | 人员 `.xls` 导入 | Excel、MySQL |
-| `work_order_process.customer_account_import` | 台账 Excel 快照导入 | Excel、MySQL |
-| `work_order_process.auxiliary_schema` | 确保 ERP 和台账表存在 | MySQL DDL |
+| `work_order_process.customer_account_import` | 客户台账 Excel 快照导入 | Excel、MySQL |
+| `work_order_process.auxiliary_schema` | 确保 ERP 和客户台账表存在 | MySQL DDL |
 | `work_order_process.erp_schema` | ERP 69/78 列结构常量 | 无 |
 | `work_order_process.erp_import` | 标准 ERP 校验和原子发布 | Excel/DataFrame、MySQL |
 | `work_order_process.erp_migrations` | 补充 ERP 年度分摊列 | MySQL DDL |
@@ -960,7 +960,7 @@ ERP 发布总控：
 - `work_order_process.cli._print_sync_log`：显示同步日志。
 - `work_order_process.cli._print_erp_import_report`：ERP 报告。
 - `work_order_process.cli._print_revenue_summary_report`：营收报告。
-- `work_order_process.cli._print_customer_account_import_report`：台账报告。
+- `work_order_process.cli._print_customer_account_import_report`：客户台账报告。
 - `work_order_process.cli._print_personnel_import_report`：人员报告。
 - `work_order_process.cli._get_log_limit`：延迟取日志条数。
 - `work_order_process.cli._probe`：通用 API 探测。
@@ -1129,15 +1129,15 @@ ERP 发布总控：
 - `work_order_process.personnel_import.upsert_personnel_rows`：按工号 upsert。
 - `work_order_process.personnel_import._normalize_cell`：去空和数字 `.0`。
 
-#### 台账：`work_order_process.customer_account_import`
+#### 客户台账：`work_order_process.customer_account_import`
 
-- `work_order_process.customer_account_import._to_date`：台账日期转换。
+- `work_order_process.customer_account_import._to_date`：客户台账日期转换。
 - `work_order_process.customer_account_import._to_decimal`：金额转换。
 - `work_order_process.customer_account_import._to_int`：整数转换。
 - `work_order_process.customer_account_import._to_str`：文本转换。
 - `work_order_process.customer_account_import.convert`：按目标列选择转换器。
-- `work_order_process.customer_account_import.import_customer_account_xlsx`：台账批量入库。
-- `work_order_process.customer_account_import.main`：脚本式台账入口。
+- `work_order_process.customer_account_import.import_customer_account_xlsx`：客户台账批量入库。
+- `work_order_process.customer_account_import.main`：脚本式客户台账入口。
 
 #### 辅助表：`work_order_process.auxiliary_schema`
 
@@ -1311,7 +1311,7 @@ ERP 发布总控：
 | API 审计 | `api_raw_record` | `id` | 原始接口记录 |
 | 任务 | `sync_task_log` | `id` | 工单等任务结果 |
 | 人员 | `personnel` | `employee_no` | 人员花名册 |
-| 台账 | `customer_account` | `(id, create_date)` | 台账快照 |
+| 客户台账 | `customer_account` | `(id, create_date)` | 客户台账快照 |
 | ERP | `erp_data` | `(id, create_date)` | ERP 快照 |
 | 营收 | `ops_service_revenue_monthly` | `(stat_year, stat_month, sales_platform)` | 月度平台指标 |
 | 视图 | `v_customer_service_overview` | 客户版本 | 客户工单汇总 |
@@ -1335,7 +1335,7 @@ ERP 发布总控：
 contract_id + item_code + exec_detail_id + create_date
 ```
 
-台账未使用同样严格唯一键，因为源数据中存在业务上需要进一步确认的重复。
+客户台账未使用同样严格唯一键，因为源数据中存在业务上需要进一步确认的重复。
 
 营收表的自然粒度就是：
 
@@ -1391,7 +1391,7 @@ GROUP BY create_date
 ORDER BY create_date DESC;
 ```
 
-台账同理：
+客户台账同理：
 
 ```sql
 SELECT create_date, COUNT(*) AS row_count
@@ -1553,7 +1553,7 @@ ORDER BY id DESC
 LIMIT 50;
 ```
 
-### 7.8 台账和 ERP 关联
+### 7.8 客户台账和 ERP 关联
 
 ```sql
 SELECT
@@ -1630,7 +1630,7 @@ git diff --cached --check
 | `test_mysql_storage.py` | 工单 DDL、事务和导入 |
 | `test_customer_contact_sync.py` | 当前/历史实体同步 |
 | `test_personnel_import.py` | 人员 `.xls` |
-| `test_snapshot_imports.py` | ERP/台账表结构和快照 |
+| `test_snapshot_imports.py` | ERP/客户台账表结构和快照 |
 | `test_erp_import.py` | ERP 原子发布和校验 |
 | `tests/erp_merge/*` | ERP 配置、映射、合并和分摊 |
 | `test_revenue_summary.py` | 营收口径、写库和 Excel |
