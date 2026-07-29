@@ -706,6 +706,7 @@ uv run --all-groups work_order_process metric-ticket `
 | `work_order_process.monthly_export` | 月度列表和详情样本导出 | API、JSON 文件 |
 | `work_order_process.resolver` | ID、枚举、自定义字段和值解析 | API 详情请求、内存变换 |
 | `work_order_process.structured_ticket` | 工单数据库/Excel 行结构 | 纯转换 |
+| `work_order_process.import_failures` | 导入失败的结构化、脱敏和有界收集 | 纯转换 |
 | `work_order_process.transform` | 旧式列表筛选、补全和翻译 | 纯转换 |
 | `work_order_process.mysql_storage` | 工单表、分区、导入和同步日志 | MySQL、API、失败 JSON |
 | `work_order_process.structured_entities` | 客户和联系人标准行 | 纯转换 |
@@ -1031,6 +1032,12 @@ ERP 发布总控：
 - `work_order_process.structured_ticket.json_or_none`：复杂值 JSON 化。
 - `work_order_process.structured_ticket.stringify_value`：用于 Excel 的值文本化。
 - `work_order_process.structured_ticket.value_type`：识别值类型。
+
+#### 导入失败：`work_order_process.import_failures`
+
+- `work_order_process.import_failures.ImportFailure`：不可变的单条导入失败记录。
+- `work_order_process.import_failures.FailureCollector`：统计失败总数并保留有上限的失败详情；使用 `FailureCollector.capture` 捕获异常，使用 `FailureCollector.as_payload` 生成结果负载。
+- `work_order_process.import_failures.sanitize_failure_message`：移除显式密钥、邮箱、手机号和密码赋值，并将消息限制为 500 个字符。
 
 #### 工单解析：`work_order_process.resolver`
 
