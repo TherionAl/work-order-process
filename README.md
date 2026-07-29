@@ -9,7 +9,7 @@
 1. 按创建时间导出指定年份或月份的工单列表。
 2. 生成三段式详情 JSON：`raw`、`value_resolved`、`chinese`。
 3. 保留原始 ID，同时补充可读名称字段，便于入库后分析。
-4. 支持工单、客户、联系人、ERP、台账及营收汇总数据统一进入 MySQL 数据湖。
+4. 支持工单、客户、联系人、ERP、客户台账及营收汇总数据统一进入 MySQL 数据湖。
 5. 支持按月分区、未来分区创建、按月/按年批量导入、断点续跑和同步日志查看。
 6. 支持新旧 ERP 原始文件直接合并、计算年度分摊、原子替换数据库快照并导出数据库同版 Excel。
 
@@ -153,7 +153,7 @@ uv run work_order_process mysql-add-partitions --months-ahead 6
 uv run work_order_process mysql-sync-log --log-limit 20
 ```
 
-## ERP、台账和营收
+## ERP、客户台账和营收
 
 将新旧 ERP 原始文件直接合并、计算 2026 年度分摊、原子写入数据库，再从数据库导出
 单 Sheet 文档版：

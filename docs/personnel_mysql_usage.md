@@ -2,7 +2,9 @@
 
 ## 表结构
 
-`mysql-import-personnel` 会把根目录的 `人员信息名单20260708.xls` 导入到 `personnel` 表。
+`mysql-import-personnel` 将明确指定的本地 `.xls` 人员名单导入到 `personnel` 表。命令默认
+没有人员文件；缺失 `--personnel-file` 时 CLI 会调用
+`parser.error("mysql-import-personnel requires --personnel-file")` 并停止执行。
 
 | Excel 字段 | MySQL 字段 | 说明 |
 | --- | --- | --- |
@@ -15,14 +17,11 @@
 ## 导入命令
 
 ```powershell
-uv run work_order_process mysql-import-personnel
-```
-
-指定其他文件：
-
-```powershell
 uv run work_order_process mysql-import-personnel --personnel-file .\人员信息名单20260708.xls
 ```
+
+如需导入另一份工作簿，仍必须把该文件路径显式传给 `--personnel-file`；不要依赖根目录、
+当前日期或隐式文件名。
 
 ## 关联查询
 

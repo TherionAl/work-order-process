@@ -18,7 +18,7 @@
 | API 审计 | `api_raw_record` | `id` | 原始接口记录 |
 | 运行日志 | `sync_task_log` | `id` | 工单、客户和联系人任务结果 |
 | 人员 | `personnel` | `employee_no` | 本地人员花名册 |
-| 台账 | `customer_account` | `(id, create_date)` | 客户台账每日快照 |
+| 客户台账 | `customer_account` | `(id, create_date)` | 客户台账每日快照 |
 | ERP | `erp_data` | `(id, create_date)` | 新旧 ERP 合并后的每日快照 |
 | 营收 | `ops_service_revenue_monthly` | `(stat_year, stat_month, sales_platform)` | 月度营收指标 |
 | 分析视图 | `v_customer_service_overview` | 无 | 客户与工单汇总 |
@@ -59,7 +59,7 @@ erDiagram
     CUSTOMER_ACCOUNT }o--o{ TICKET_DETAIL_MAIN : "客户名称或项目字段 辅助匹配"
 ```
 
-工单与客户、联系人优先使用源系统 ID 关联。台账与 ERP 优先使用
+工单与客户、联系人优先使用源系统 ID 关联。客户台账与 ERP 优先使用
 `contract_code = contract_id` 和 `item_code`；只有来源缺少稳定 ID 时才使用规范化后的
 客户名称、项目名称等辅助字段，并应单独统计未匹配和一对多结果。
 
@@ -190,7 +190,7 @@ LEFT JOIN contacts AS p ON p.contact_id = t.cust_user_id
 WHERE t.create_dt >= '2026-06-01' AND t.create_dt < '2026-07-01';
 ```
 
-按合同和标的行关联同日台账、ERP：
+按合同和标的行关联同日客户台账、ERP：
 
 ```sql
 SELECT

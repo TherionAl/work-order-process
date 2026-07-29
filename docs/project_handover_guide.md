@@ -52,26 +52,20 @@ D:\Users\python_project\work_order_process
 
 ### 1.4 第一次打开项目
 
-以下命令不会访问 API 或修改数据库：
+以下只读检查不访问 API 或修改数据库；完整安装、测试、静态检查和 CLI help 请复制执行
+第 8.2 节唯一权威的本地质量门槛：
 
 ```powershell
 Set-Location D:\Users\python_project\work_order_process
 git status --short
 git log --oneline -10
 uv --version
-uv sync --all-groups --locked
-uv lock --check
-uv run --all-groups pytest -q
-uv run --all-groups work_order_process --help
-uv run --all-groups erp-merge --help
 ```
 
 预期：
 
-- `uv sync` 按 `uv.lock` 创建或更新 `.venv`。
-- `uv lock --check` 不改锁文件。
-- pytest 全部通过。
-- 两个 `--help` 能正常输出参数。
+- 第 8.2 节的 `uv sync` 按 `uv.lock` 创建或更新 `.venv`，`uv lock --check` 不改锁文件。
+- 第 8.2 节的 pytest、Ruff、编译和两个 `--help` 均通过。
 - `git status --short` 可能显示业务人员放入 `data/` 的未跟踪文件，不得擅自删除或提交。
 
 ### 1.5 创建本地配置
@@ -270,11 +264,8 @@ work_order_process/
 uv sync --locked
 ```
 
-安装测试和 ERP 全部依赖：
-
-```powershell
-uv sync --all-groups --locked
-```
+安装测试和 ERP 全部依赖时，执行第 8.2 节的本地完整质量门槛；其中第一条命令会精确安装
+全部锁定依赖。
 
 | 依赖组 | 内容 | 使用场景 |
 |---|---|---|
@@ -461,6 +452,12 @@ uv run --all-groups work_order_process mysql-migrate
 第 9 章的 8 步流程停止和恢复 `daily_runner`；本手册的命令示例不表示任何生产数据库
 已经执行迁移。
 
+#### 迁移命令边界（契约）
+
+- `mysql-schema-status`：只读；不创建或修改表、不写入版本、不执行 DDL。
+- `mysql-init`：只创建新库基础结构并记录已满足迁移；不执行 pending migration DDL。
+- `mysql-migrate`：唯一显式执行 pending migration DDL 的命令。
+
 #### `mysql-drop-tables`（R3，危险）
 
 删除项目管理的工单基础表。CLI 不提供二次确认。
@@ -583,8 +580,11 @@ uv run --all-groups work_order_process mysql-import-contacts `
 
 来源可为 `contacts`、`company_contacts`、`both`。
 
-> CLI 参数帮助文字称客户和联系人默认来源为 both，但当前 `argparse` 实际默认分别为
-> `companies` 和 `contacts`。接手时以代码默认值为准；后续应修正帮助文字。
+#### 导入来源和人员文件默认值（契约）
+
+- `--customers-source` 默认 `companies`。
+- `--contacts-source` 默认 `contacts`。
+- `--personnel-file` 默认 `None`，缺失时 `parser.error`。
 
 ### 5.7 人员、客户台账和已整理 ERP
 
@@ -842,8 +842,7 @@ with WorkOrderClient(settings) as client:
 #### 受控重试：`work_order_process.api_transport`
 
 `RetryPolicy` 默认最多尝试 3 次（首次请求也计入 3 次）。仅对 `429、502、503、504`
-和 `httpx.TransportError` 重试；其他 HTTP 状态直接返回给上层处理。响应带合法
-`Retry-After` 时优先遵从，否则使用有上限的指数退避和抖动。重试不是无限恢复机制：
+和 `httpx.TransportError` 重试；其他 HTTP 状态直接返回给上层处理。响应带合法的数值秒数 `Retry-After` 时优先遵从，否则使用有上限的指数退避和抖动。重试不是无限恢复机制：
 三次仍失败时应记录安全摘要、降低并发或 QPS，并按故障类型处理，不能无限循环或打印
 请求/响应正文。
 
@@ -866,15 +865,27 @@ with WorkOrderClient(settings) as client:
 #### 结构化失败与安全摘要：`work_order_process.import_failures`
 
 每条失败记录固定使用 `stage`、`record_id`、`source_row`、`error_type`、`safe_message`
-字段。`FailureCollector` 会分别统计总失败数和受限明细：结果中的 `failure_count` 是总数，
-`failures` 只保留上限内的脱敏摘要，`failures_truncated=true` 表示还有未展开失败。
-摘要会移除显式密钥、密码赋值、邮箱、手机号以及 JSON/请求/响应载荷，并限制长度；排障时
-应关联 `sync_task_log` 与安全的 `stage`/ID，不能把原始客户资料或凭据贴入日志。
+字段。`FailureCollector` 默认最多保留 100 条失败详情；`safe_message` 默认最多 500 个字符。
+`failure_count` 统计总失败数，`failed_ids` 保持完整；`failures` 只保留上限内的脱敏摘要，
+`failures_truncated=true` 表示还有未展开失败。摘要会移除显式密钥、密码赋值、邮箱、手机号
+以及 JSON/请求/响应载荷；排障时应关联 `sync_task_log` 与安全的 `stage`/ID，不能把原始
+客户资料或凭据贴入日志。
 
 #### `work_order_process.mysql_storage.upsert_ticket_detail`
 
 单工单事务边界。主表使用 upsert，自定义字段按该工单全量刷新。主表与明细任一步失败都
 回滚，返回值为 `inserted` 或 `updated`。
+
+#### 兼容层/实现映射
+
+| 旧调用入口 | 当前实现 | 兼容保证 |
+|---|---|---|
+| `mysql_storage.import_month_tickets_to_mysql` / `import_month_tickets_serial` / `import_year_tickets_to_mysql` | `ticket_import` 的同名实现 | 旧导入调用路径保持可用。 |
+| `_fetch_month_ticket_rows`、`_prefetch_ticket_entities`、`_str_or_none`、`_filter_ticket_rows_for_import`、`_same_datetime`、`_commit_batch_atomic`、`_fetch_batch_details`、`_commit_batch`、`_merge_failure_collectors`、`_merge_failure_payload`、`_safe_rollback` | `ticket_import` 的对应 private helper | 保留测试和旧调用方的 private helper 兼容。 |
+| `_write_sync_log` / `SYNC_TASK_LOG_DDL` | `sync_log.write_sync_log` / `sync_log.SYNC_TASK_LOG_DDL` | 同步日志提取后仍保留原模块入口。 |
+| `cli.main` / `cli.build_parser` / `cli.dispatch_command` | `cli_commands` handlers | 公开 CLI 入口和 monkeypatch seams 保留。 |
+
+这些 facade 在函数内延迟导入实现，以避免循环导入；旧调用方无需改动。
 
 ### 6.5 客户联系人同步核心
 
@@ -1740,40 +1751,21 @@ WHERE a.create_date = '20260717';
 
 ### 8.2 常用开发命令
 
+先跑目标测试定位问题；提交前检查和首次接手均引用以下唯一权威块，不再维护残缺副本。
+
+#### 本地完整质量门槛（唯一权威）
+
 ```powershell
-# 精确安装所有锁定依赖
 uv sync --all-groups --locked
-
-# 确认 pyproject 和锁文件一致
 uv lock --check
-
-# 单文件
-uv run --all-groups pytest tests/test_revenue_summary.py -q
-
-# 单测试
-uv run --all-groups pytest `
-  tests/test_erp_import.py::test_import_rejects_nonempty_invalid_amount_with_field_and_row -q
-
-# 完整测试
-uv run --all-groups pytest -q
-
-# 最终质量门槛：保留阈值和 -q，并固定读取当前 pyproject 覆盖率配置
-uv run --all-groups pytest --cov=work_order_process --cov-config=pyproject.toml --cov-fail-under=70 -q
-
-# 静态检查
 uv run --all-groups ruff check src tests
 uv run --all-groups ruff format --check src tests
-
-# 编译检查
+uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 --cov-config=pyproject.toml -q
 uv run --all-groups python -m compileall -q src tests
-
-# 命令帮助（不会访问真实 API 或数据库）
 uv run work_order_process --help
 uv run erp-merge --help
-
-# 空白和冲突标记检查
 git diff --check
-git diff --cached --check
+git status --short
 ```
 
 ### 8.3 测试与模块对应
@@ -1805,7 +1797,7 @@ git diff --cached --check
 1. checkout 仓库。
 2. 安装 Python 3.14 和 uv。
 3. `uv lock --check`。
-4. `uv sync --all-groups --locked`。
+4. 执行第 8.2 节质量门槛的第一条依赖安装命令。
 5. 单独运行仓库安全测试。
 6. 运行完整 pytest。
 
@@ -1878,9 +1870,6 @@ cd /opt/work_order_process
 git fetch --all --prune
 git status --short
 git pull --ff-only
-uv sync --all-groups --locked
-uv lock --check
-uv run --all-groups pytest -q
 sudo systemctl restart work-order-daily.service
 sudo systemctl is-active work-order-daily.service
 sudo systemctl status work-order-daily.service --no-pager
@@ -2148,14 +2137,7 @@ APScheduler 的“任务触发/执行”与业务导入成功不是同一层。�
 
 ### 11.2 提交前检查
 
-```powershell
-uv sync --all-groups --locked
-uv lock --check
-uv run --all-groups pytest -q
-uv run --all-groups python -m compileall -q src merge_erp_data.py main.py
-git diff --check
-git status --short
-```
+复制执行第 8.2 节的“本地完整质量门槛（唯一权威）”，不要在本节维护部分命令副本。
 
 人工检查：
 
