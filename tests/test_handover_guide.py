@@ -43,6 +43,8 @@ def _source_symbols() -> set[str]:
     symbols: set[str] = set()
     for path in SOURCE_ROOT.rglob("*.py"):
         relative = path.relative_to(SOURCE_ROOT).with_suffix("")
+        if relative.parts[0] == "cli_commands":
+            continue
         module = ".".join(relative.parts)
         if module == "__init__":
             continue

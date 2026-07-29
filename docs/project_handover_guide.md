@@ -767,6 +767,16 @@ uv run --all-groups work_order_process metric-ticket `
 - 异常：API 错误转为退出码 2，配置错误转为退出码 3；其他数据或数据库异常向上抛出。
 - 调用关系：控制台入口 `work_order_process` 和根目录 `main.py`。
 
+#### `work_order_process.cli.build_parser`
+
+- 签名：`build_parser() -> argparse.ArgumentParser`
+- 职责：构造可复用的 CLI 参数解析器，供命令行入口和测试共同使用。
+
+#### `work_order_process.cli.dispatch_command`
+
+- 签名：`dispatch_command(args: argparse.Namespace, settings: Settings, parser: argparse.ArgumentParser) -> None`
+- 职责：按数据库、导入、导出和诊断的固定顺序路由已解析命令；未知路由会抛出 `RuntimeError`。
+
 #### `work_order_process.erp_merge.cli.main`
 
 - 签名：`main(argv: Iterable[str] | None = None) -> None`
@@ -991,6 +1001,8 @@ ERP 发布总控：
 - `work_order_process.config.load_settings`：加载 `.env` 和环境变量。
 - `work_order_process.cli`：通用 CLI 模块。
 - `work_order_process.cli.main`：CLI 总入口。
+- `work_order_process.cli.build_parser`：构造可复用参数解析器。
+- `work_order_process.cli.dispatch_command`：分派已解析的命令。
 - `work_order_process.cli._resolve_sources`：解析单/多来源。
 - `work_order_process.cli._print_sync_log`：显示同步日志。
 - `work_order_process.cli._print_erp_import_report`：ERP 报告。
