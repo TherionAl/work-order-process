@@ -92,8 +92,11 @@ def test_nonempty_invalid_amount_fails_with_source_row() -> None:
     with pytest.raises(
         CustomerAccountImportError,
         match=r"annual_ops_fee.*source row 3",
-    ):
+    ) as error:
         convert_strict("annual_ops_fee", "bad amount", source_row=3)
+
+    assert error.value.failure.stage == "parse"
+    assert error.value.failure.source_row == 3
 
 
 def test_valid_date_string_is_normalized() -> None:

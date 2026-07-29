@@ -12,11 +12,11 @@ from openpyxl import load_workbook
 
 from .config import MySQLConfig
 from .auxiliary_schema import ensure_auxiliary_schema
-from .import_failures import FailureCollector
+from .import_failures import FailureCollector, ImportFailure
 
 logger = logging.getLogger(__name__)
 
-PARSE_FAILURE_STAGE = "customer_account_parse"
+PARSE_FAILURE_STAGE = "parse"
 STAGE_FAILURE_STAGE = "customer_account_stage"
 PUBLISH_FAILURE_STAGE = "customer_account_publish"
 STAGE_FAILURE_MESSAGES = {
@@ -27,6 +27,15 @@ STAGE_FAILURE_MESSAGES = {
 
 class CustomerAccountImportError(RuntimeError):
     """Raised when a customer-account snapshot cannot be safely published."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure: ImportFailure | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.failure = failure
 
 # Excel 列名 → DB 列名（按顺序对应 Sheet1 的 40 列）
 COLUMN_MAP = [
@@ -225,9 +234,13 @@ def convert_strict(column: str, value: object, *, source_row: int) -> object:
     try:
         return converter(value)
     except (TypeError, ValueError) as exc:
-        raise CustomerAccountImportError(
-            f"{column} contains an invalid nonempty value at source row {source_row}"
-        ) from exc
+        message = f"{column} contains an invalid nonempty value at source row {source_row}"
+        failure = FailureCollector(limit=1).capture(
+            stage=PARSE_FAILURE_STAGE,
+            exc=CustomerAccountImportError(message),
+            source_row=source_row,
+        )
+        raise CustomerAccountImportError(message, failure=failure) from exc
 
 
 def prepare_customer_account_row(
@@ -354,28 +367,32 @@ def _import_customer_account_snapshot(
     except CustomerAccountImportError as exc:
         if conn is not None:
             conn.rollback()
-        logger.error(
-            "customer account import failed: %s",
-            failures.capture(
+        if exc.failure is None:
+            exc.failure = failures.capture(
                 stage=current_stage,
                 exc=exc,
                 record_id="customer_account_snapshot",
-            ).as_dict(),
+            )
+        logger.error(
+            "customer account import failed: %s",
+            exc.failure.as_dict(),
         )
         raise
     except Exception as exc:
         if conn is not None:
             conn.rollback()
-        safe_exception = CustomerAccountImportError(
-            STAGE_FAILURE_MESSAGES.get(current_stage, "customer account import failed")
+        safe_message = STAGE_FAILURE_MESSAGES.get(
+            current_stage, "customer account import failed"
         )
+        failure = failures.capture(
+            stage=current_stage,
+            exc=CustomerAccountImportError(safe_message),
+            record_id="customer_account_snapshot",
+        )
+        safe_exception = CustomerAccountImportError(safe_message, failure=failure)
         logger.error(
             "customer account import failed: %s",
-            failures.capture(
-                stage=current_stage,
-                exc=safe_exception,
-                record_id="customer_account_snapshot",
-            ).as_dict(),
+            failure.as_dict(),
         )
         raise safe_exception from exc
     finally:

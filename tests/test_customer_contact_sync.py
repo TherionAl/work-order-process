@@ -10,14 +10,16 @@ class FakeStore:
     def __init__(self) -> None:
         self.started: list[str] = []
         self.finished: list[tuple[str, str]] = []
+        self.finish_details: list[dict[str, object]] = []
         self.saved: list[tuple[str, dict]] = []
 
     def start_batch(self, entity_type: str) -> str:
         self.started.append(entity_type)
         return "batch-1"
 
-    def finish_batch(self, batch_id: str, status: str, **_: object) -> None:
+    def finish_batch(self, batch_id: str, status: str, **details: object) -> None:
         self.finished.append((batch_id, status))
+        self.finish_details.append(details)
 
     def save_entity(self, **kwargs: object) -> str:
         self.saved.append((str(kwargs["entity_type"]), dict(kwargs["row"])))
@@ -68,3 +70,52 @@ def test_customer_sync_uses_paged_bulk_writes_and_respects_limit() -> None:
     assert report.inserted == 2
     assert [len(batch) for batch in store.batches] == [2]
     assert store.saved == []
+
+
+class InvalidRecordClient:
+    def iter_companies(self):
+        yield [{"uId": "", "companyName": "missing stable id"}]
+
+
+def test_invalid_customer_is_failed_with_safe_reason() -> None:
+    store = FakeStore()
+
+    report = sync_customer_entities(
+        None,
+        InvalidRecordClient(),
+        sources=["companies"],
+        store=store,
+    )
+
+    assert report.status == "partial"
+    assert report.failed == 1
+    assert report.failures[0]["stage"] == "prepare"
+    assert report.failures[0]["source_row"] == 1
+    assert report.failures[0]["error_type"]
+    error_message = str(store.finish_details[0]["error_message"])
+    assert "prepare ValueError" in error_message
+    assert "\n" not in error_message
+
+
+class BulkFailsThenOneRowFailsStore(FakeStore):
+    def save_entities(self, **_: object) -> dict[str, int]:
+        raise RuntimeError("bulk write failed")
+
+    def save_entity(self, **kwargs: object) -> str:
+        if kwargs["row"]["customer_id"] == "C2":
+            raise RuntimeError("row write failed")
+        return "inserted"
+
+
+def test_bulk_fallback_records_only_final_row_failure() -> None:
+    report = sync_customer_entities(
+        None,
+        PagedClient(),
+        sources=["companies"],
+        store=BulkFailsThenOneRowFailsStore(),
+    )
+
+    assert report.inserted == 2
+    assert report.failed == 1
+    assert [failure["record_id"] for failure in report.failures] == ["C2"]
+    assert report.failures[0]["stage"] == "database"

@@ -1088,6 +1088,8 @@ ERP 发布总控：
 - `work_order_process.mysql_storage._commit_batch_atomic`：新连接单事务提交一批。
 - `work_order_process.mysql_storage._fetch_batch_details`：并发取原始和解析详情。
 - `work_order_process.mysql_storage._commit_batch`：批量写入并按需逐行定位。
+- `work_order_process.mysql_storage._merge_failure_collectors`：合并有界的结构化失败收集器。
+- `work_order_process.mysql_storage._merge_failure_payload`：合并批次报告中的安全失败明细。
 - `work_order_process.mysql_storage._safe_rollback`：连接可用时回滚。
 - `work_order_process.mysql_storage.import_year_tickets_to_mysql`：逐月执行年度导入。
 - `work_order_process.mysql_storage.import_customers_to_mysql`：客户同步外观函数。

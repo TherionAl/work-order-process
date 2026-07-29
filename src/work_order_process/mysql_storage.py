@@ -28,7 +28,11 @@ from typing import Any, Iterable
 from .api import ApiError, WorkOrderClient
 from .config import MySQLConfig
 from .dictionary import DataDictionary
+from .import_failures import FailureCollector, ImportFailure
 from .resolver import TicketFieldResolver, _split_id_list, resolve_ticket_detail_values
+
+API_FAILURE_STAGE = "api"
+DATABASE_FAILURE_STAGE = "database"
 
 
 # ---------------------------------------------------------------------------
@@ -915,6 +919,8 @@ def import_month_tickets_to_mysql(
             "skipped": 0,
             "failed": 0,
             "failed_ids": [],
+            "failures": [],
+            "failures_truncated": False,
         }
 
     ensure_mysql_schema(config)
@@ -948,6 +954,8 @@ def import_month_tickets_to_mysql(
             "skipped": already_current,
             "failed": 0,
             "failed_ids": [],
+            "failures": [],
+            "failures_truncated": False,
             "custom_field_rows": 0,
             "duration_seconds": 0,
         }
@@ -968,15 +976,24 @@ def import_month_tickets_to_mysql(
     updated = 0
     skipped = already_current
     failed_ids: list[str] = []
+    failures = FailureCollector()
     total_custom = 0
     started_at = datetime.now()
     api_semaphore = threading.Semaphore(max(1, api_rate_limit))
 
     for batch_start in range(0, len(ticket_ids), batch_size):
         batch = ticket_ids[batch_start:batch_start + batch_size]
-        detail_map = _fetch_batch_details(client, batch, field_resolver, api_semaphore, max_workers=max_workers)
+        detail_map, api_failures = _fetch_batch_details(
+            client,
+            batch,
+            field_resolver,
+            api_semaphore,
+            max_workers=max_workers,
+        )
+        _merge_failure_collectors(failures, api_failures)
         missing_detail_ids = [tid for tid in batch if tid not in detail_map]
         batch_result = _commit_batch_atomic(config, detail_map)
+        _merge_failure_payload(failures, batch_result)
         imported += batch_result["imported"]
         updated += batch_result["updated"]
         skipped += batch_result["skipped"]
@@ -986,6 +1003,7 @@ def import_month_tickets_to_mysql(
 
     duration = int((datetime.now() - started_at).total_seconds())
     overall_status = "success" if not failed_ids else ("partial" if (imported + updated) > 0 else "failed")
+    failure_payload = failures.as_payload()
     _write_sync_log(
         config,
         task_type="ticket_detail",
@@ -1001,6 +1019,8 @@ def import_month_tickets_to_mysql(
         error_message=None if overall_status == "success" else f"{len(failed_ids)} tickets failed",
         extra_json={
             "failed_ids": failed_ids,
+            "failures": failure_payload["failures"],
+            "failures_truncated": failure_payload["failures_truncated"],
             "ticket_source": ticket_source,
             "limit_per_month": limit_per_month,
         } if failed_ids else {
@@ -1018,6 +1038,8 @@ def import_month_tickets_to_mysql(
         "skipped": skipped,
         "failed": len(failed_ids),
         "failed_ids": failed_ids,
+        "failures": failure_payload["failures"],
+        "failures_truncated": failure_payload["failures_truncated"],
         "custom_field_rows": total_custom,
         "duration_seconds": duration,
     }
@@ -1159,6 +1181,8 @@ def _commit_batch_atomic(
             "updated": 0,
             "skipped": 0,
             "failed_ids": [],
+            "failures": [],
+            "failures_truncated": False,
             "custom_rows": 0,
         }
 
@@ -1174,12 +1198,22 @@ def _commit_batch_atomic(
             autocommit=False,
         ) as connection:
             return _commit_batch(connection, detail_map)
-    except Exception:
+    except Exception as exc:
+        failures = FailureCollector()
+        for ticket_id in detail_map:
+            failures.capture(
+                stage=DATABASE_FAILURE_STAGE,
+                exc=exc,
+                record_id=ticket_id,
+            )
+        failure_payload = failures.as_payload()
         return {
             "imported": 0,
             "updated": 0,
             "skipped": 0,
             "failed_ids": [str(tid) for tid in detail_map.keys()],
+            "failures": failure_payload["failures"],
+            "failures_truncated": failure_payload["failures_truncated"],
             "custom_rows": 0,
         }
 
@@ -1190,29 +1224,49 @@ def _fetch_batch_details(
     field_resolver: TicketFieldResolver,
     semaphore: threading.Semaphore,
     max_workers: int = 8,
-) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
+) -> tuple[
+    dict[str, tuple[dict[str, Any], dict[str, Any]]],
+    FailureCollector,
+]:
     """Fetch raw details and resolved details together so raw field keys are preserved."""
 
-    def _fetch_one(ticket_id: str) -> tuple[str, tuple[dict[str, Any], dict[str, Any]] | None]:
+    def _fetch_one(
+        ticket_id: str,
+    ) -> tuple[
+        str,
+        tuple[dict[str, Any], dict[str, Any]] | None,
+        BaseException | None,
+    ]:
         with semaphore:
             try:
                 raw = client.fetch_ticket_detail(ticket_id)
                 if not raw:
-                    return ticket_id, None
+                    return (
+                        ticket_id,
+                        None,
+                        RuntimeError("ticket detail API returned no record"),
+                    )
                 value = resolve_ticket_detail_values(raw, client, field_resolver)
-                return ticket_id, (raw, value)
-            except Exception:
-                return ticket_id, None
+                return ticket_id, (raw, value), None
+            except Exception as exc:
+                return ticket_id, None, exc
 
     results: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    failures = FailureCollector()
     worker_count = max(1, min(max_workers, len(ticket_ids))) if ticket_ids else 1
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = {executor.submit(_fetch_one, ticket_id): ticket_id for ticket_id in ticket_ids}
         for future in as_completed(futures):
-            ticket_id, detail_pair = future.result()
+            ticket_id, detail_pair, error = future.result()
             if detail_pair is not None:
                 results[ticket_id] = detail_pair
-    return results
+            elif error is not None:
+                failures.capture(
+                    stage=API_FAILURE_STAGE,
+                    exc=error,
+                    record_id=ticket_id,
+                )
+    return results, failures
 
 
 def _commit_batch(
@@ -1225,6 +1279,7 @@ def _commit_batch(
     updated = 0
     skipped = 0
     failed_ids: list[str] = []
+    failures = FailureCollector()
     custom_rows_total = 0
 
     batch_rows: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
@@ -1261,17 +1316,70 @@ def _commit_batch(
                 else:
                     imported += 1
                     custom_rows_total += len(custom_rows)
-            except Exception:
-                failed_ids.append(str(main_row.get("ticket_id", "")))
+            except Exception as exc:
+                ticket_id = str(main_row.get("ticket_id", ""))
+                failed_ids.append(ticket_id)
+                failures.capture(
+                    stage=DATABASE_FAILURE_STAGE,
+                    exc=exc,
+                    record_id=ticket_id,
+                )
                 _safe_rollback(connection)
 
+    failure_payload = failures.as_payload()
     return {
         "imported": imported,
         "updated": updated,
         "skipped": skipped,
         "failed_ids": failed_ids,
+        "failures": failure_payload["failures"],
+        "failures_truncated": failure_payload["failures_truncated"],
         "custom_rows": custom_rows_total,
     }
+
+
+def _merge_failure_collectors(
+    target: FailureCollector,
+    source: FailureCollector,
+) -> None:
+    """Merge bounded structured failures without reconstructing exceptions."""
+
+    target.total += source.total
+    remaining = max(0, target.limit - len(target.failures))
+    target.failures.extend(source.failures[:remaining])
+
+
+def _merge_failure_payload(
+    target: FailureCollector,
+    payload: dict[str, Any],
+) -> None:
+    """Merge a helper report's already-sanitized structured failures."""
+
+    source_failures = payload.get("failures")
+    if not isinstance(source_failures, list):
+        return
+    target.total += len(payload.get("failed_ids") or source_failures)
+    remaining = max(0, target.limit - len(target.failures))
+    for failure_payload in source_failures[:remaining]:
+        if not isinstance(failure_payload, dict):
+            continue
+        target.failures.append(
+            ImportFailure(
+                stage=str(failure_payload.get("stage") or ""),
+                record_id=(
+                    None
+                    if failure_payload.get("record_id") is None
+                    else str(failure_payload["record_id"])
+                ),
+                source_row=(
+                    int(failure_payload["source_row"])
+                    if failure_payload.get("source_row") is not None
+                    else None
+                ),
+                error_type=str(failure_payload.get("error_type") or ""),
+                safe_message=str(failure_payload.get("safe_message") or ""),
+            )
+        )
 
 
 def _safe_rollback(connection: Any) -> None:

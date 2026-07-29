@@ -1,3 +1,9 @@
+import threading
+from typing import Any
+
+from work_order_process import mysql_storage
+from work_order_process.config import MySQLConfig
+from work_order_process.import_failures import FailureCollector
 from work_order_process.mysql_storage import (
     API_RAW_RECORD_DDL,
     API_SYNC_BATCH_DDL,
@@ -7,7 +13,10 @@ from work_order_process.mysql_storage import (
     CUSTOMER_CONTACT_RELATION_HISTORY_DDL,
     CUSTOMERS_ALTER_STATEMENTS,
     CUSTOMER_SERVICE_VIEW_SQL,
+    _commit_batch,
+    _fetch_batch_details,
     build_ticket_detail_main_row,
+    import_month_tickets_to_mysql,
 )
 
 
@@ -48,3 +57,176 @@ def test_customer_service_view_uses_ticket_time_and_history_period() -> None:
     assert "CREATE OR REPLACE VIEW v_customer_service_overview" in CUSTOMER_SERVICE_VIEW_SQL
     assert "t.create_dt >= h.effective_from" in CUSTOMER_SERVICE_VIEW_SQL
     assert "h.effective_to IS NULL" in CUSTOMER_SERVICE_VIEW_SQL
+
+
+class FailingTicketClient:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def fetch_ticket_detail(self, _: str) -> dict[str, Any]:
+        raise self.error
+
+
+class FakeResolver:
+    pass
+
+
+def test_fetch_batch_details_returns_api_failure_reason() -> None:
+    client = FailingTicketClient(RuntimeError("temporary API failure"))
+
+    details, failures = _fetch_batch_details(
+        client,
+        ["T1"],
+        FakeResolver(),
+        threading.Semaphore(1),
+        max_workers=1,
+    )
+
+    assert details == {}
+    assert failures.as_payload()["failures"][0]["record_id"] == "T1"
+    assert failures.as_payload()["failures"][0]["stage"] == "api"
+
+
+class RowFailingCursor:
+    def __init__(self, ticket_id: str) -> None:
+        self.ticket_id = ticket_id
+
+    def __enter__(self) -> "RowFailingCursor":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: object | None = None) -> None:
+        if (
+            sql.startswith("INSERT INTO ticket_detail_main")
+            and isinstance(params, list)
+            and str(params[0]) == self.ticket_id
+        ):
+            raise RuntimeError("row write failed")
+
+    def fetchone(self) -> None:
+        return None
+
+
+class RowFailingConnection:
+    def __init__(self, ticket_id: str) -> None:
+        self.cursor_instance = RowFailingCursor(ticket_id)
+
+    def cursor(self) -> RowFailingCursor:
+        return self.cursor_instance
+
+    def commit(self) -> None:
+        return None
+
+    def rollback(self) -> None:
+        return None
+
+
+def _detail_map(*ticket_ids: str) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
+    return {
+        ticket_id: (
+            {"ticketId": ticket_id, "createDT": "2026-07-29 00:00:00"},
+            {"ticketId": ticket_id, "createDT": "2026-07-29 00:00:00"},
+        )
+        for ticket_id in ticket_ids
+    }
+
+
+def test_commit_batch_returns_database_failure_reason() -> None:
+    connection = RowFailingConnection(ticket_id="2")
+
+    report = _commit_batch(connection, _detail_map("1", "2"))
+
+    assert report["failed_ids"] == ["2"]
+    assert report["failures"][0]["record_id"] == "2"
+    assert report["failures"][0]["stage"] == "database"
+
+
+class ImportClient:
+    def fetch_ticket_fields(self) -> list[dict[str, Any]]:
+        return []
+
+    def fetch_company_fields(self) -> list[dict[str, Any]]:
+        return []
+
+
+def test_month_import_merges_and_persists_bounded_failures(monkeypatch) -> None:
+    api_failures = FailureCollector(limit=1)
+    api_failures.capture(
+        stage="api",
+        exc=RuntimeError("temporary API failure"),
+        record_id="1",
+    )
+    api_failures.capture(
+        stage="api",
+        exc=RuntimeError("second temporary API failure"),
+        record_id="2",
+    )
+    database_failures = FailureCollector()
+    database_failures.capture(
+        stage="database",
+        exc=RuntimeError("row write failed"),
+        record_id="3",
+    )
+    logged: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        mysql_storage,
+        "_fetch_month_ticket_rows",
+        lambda *args, **kwargs: (
+            "2026-07",
+            [{"ticketId": "1"}, {"ticketId": "2"}, {"ticketId": "3"}],
+            "api",
+        ),
+    )
+    monkeypatch.setattr(mysql_storage, "ensure_mysql_schema", lambda config: None)
+    monkeypatch.setattr(
+        mysql_storage,
+        "_filter_ticket_rows_for_import",
+        lambda *args: (["1", "2", "3"], 0),
+    )
+    monkeypatch.setattr(
+        mysql_storage,
+        "_prefetch_ticket_entities",
+        lambda *args: None,
+    )
+    monkeypatch.setattr(
+        mysql_storage,
+        "_fetch_batch_details",
+        lambda *args, **kwargs: (
+            _detail_map("3"),
+            api_failures,
+        ),
+    )
+    monkeypatch.setattr(
+        mysql_storage,
+        "_commit_batch_atomic",
+        lambda *args: {
+            "imported": 0,
+            "updated": 0,
+            "skipped": 0,
+            "failed_ids": ["3"],
+            "failures": database_failures.as_payload()["failures"],
+            "failures_truncated": False,
+            "custom_rows": 0,
+        },
+    )
+    monkeypatch.setattr(
+        mysql_storage,
+        "_write_sync_log",
+        lambda *args, **kwargs: logged.update(kwargs),
+    )
+
+    report = import_month_tickets_to_mysql(
+        MySQLConfig("host", 3306, "user", "password", "database"),
+        None,
+        ImportClient(),
+        2026,
+        7,
+    )
+
+    assert report["failed_ids"] == ["1", "2", "3"]
+    assert [failure["record_id"] for failure in report["failures"]] == ["1", "3"]
+    assert report["failures_truncated"] is True
+    assert logged["extra_json"]["failures"] == report["failures"]

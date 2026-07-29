@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any, Iterable, Iterator
 
 from .config import MySQLConfig
+from .import_failures import FailureCollector
 from .mysql_storage import _pymysql, ensure_mysql_schema
 from .structured_entities import (
     CONTACT_HASH_FIELDS,
@@ -19,6 +20,9 @@ from .structured_entities import (
 )
 
 WRITE_BATCH_SIZE = 500
+API_FAILURE_STAGE = "api"
+DATABASE_FAILURE_STAGE = "database"
+PREPARE_FAILURE_STAGE = "prepare"
 
 
 @dataclass(frozen=True)
@@ -31,6 +35,8 @@ class SyncReport:
     unchanged: int
     failed: int
     status: str
+    failures: tuple[dict[str, object], ...] = ()
+    failures_truncated: bool = False
 
 
 class MySQLCustomerContactStore:
@@ -345,6 +351,7 @@ def _sync_entities(
         store = MySQLCustomerContactStore(config)
     batch_id = store.start_batch(entity_type)
     fetched = 0
+    failures = FailureCollector()
     try:
         reports = {"raw_saved": 0, "inserted": 0, "changed": 0, "unchanged": 0, "failed": 0}
         seen_ids: set[str] = set()
@@ -352,7 +359,7 @@ def _sync_entities(
         for source in sources:
             for page in _iter_source_pages(client, entity_type, source):
                 prepared: list[dict[str, Any]] = []
-                for record in page:
+                for source_row, record in enumerate(page, start=1):
                     saw_record = True
                     fetched += 1
                     try:
@@ -361,12 +368,24 @@ def _sync_entities(
                         if entity_id not in seen_ids:
                             seen_ids.add(entity_id)
                             prepared.append({"row": row, "raw_record": record, "source_name": source})
-                    except Exception:
+                    except Exception as exc:
                         reports["failed"] += 1
+                        failures.capture(
+                            stage=PREPARE_FAILURE_STAGE,
+                            exc=exc,
+                            source_row=source_row,
+                        )
                     if max_records is not None and fetched >= max_records:
                         break
                 if prepared:
-                    _save_prepared_entities(store, entity_type, prepared, batch_id, reports)
+                    _save_prepared_entities(
+                        store,
+                        entity_type,
+                        prepared,
+                        batch_id,
+                        reports,
+                        failures,
+                    )
                 if max_records is not None and fetched >= max_records:
                     break
             if max_records is not None and fetched >= max_records:
@@ -376,12 +395,35 @@ def _sync_entities(
             _finish_batch(store, report, error_message="API returned no records")
             return report
         status = "success" if reports["failed"] == 0 else "partial"
-        report = SyncReport(batch_id, fetched, status=status, **reports)
-        _finish_batch(store, report)
+        report = SyncReport(
+            batch_id,
+            fetched,
+            status=status,
+            failures=tuple(failure.as_dict() for failure in failures.failures),
+            failures_truncated=failures.total > len(failures.failures),
+            **reports,
+        )
+        _finish_batch(store, report, failure_payload=failures.as_payload())
         return report
     except Exception as exc:
-        report = SyncReport(batch_id, fetched, 0, 0, 0, 0, 1, "failed")
-        _finish_batch(store, report, error_message=type(exc).__name__)
+        failures.capture(
+            stage=API_FAILURE_STAGE,
+            exc=exc,
+            record_id=batch_id,
+        )
+        report = SyncReport(
+            batch_id,
+            fetched,
+            0,
+            0,
+            0,
+            0,
+            1,
+            "failed",
+            failures=tuple(failure.as_dict() for failure in failures.failures),
+            failures_truncated=failures.total > len(failures.failures),
+        )
+        _finish_batch(store, report, failure_payload=failures.as_payload())
         return report
     finally:
         if owns_store:
@@ -412,6 +454,7 @@ def _save_prepared_entities(
     prepared: list[dict[str, Any]],
     batch_id: str,
     reports: dict[str, int],
+    failures: FailureCollector,
 ) -> None:
     for chunk in _chunks(prepared, WRITE_BATCH_SIZE):
         if hasattr(store, "save_entities"):
@@ -428,8 +471,14 @@ def _save_prepared_entities(
                 outcome = store.save_entity(entity_type=entity_type, batch_id=batch_id, **item)
                 reports["raw_saved"] += 1
                 reports[outcome] += 1
-            except Exception:
+            except Exception as exc:
                 reports["failed"] += 1
+                id_column = "customer_id" if entity_type == "customer" else "contact_id"
+                failures.capture(
+                    stage=DATABASE_FAILURE_STAGE,
+                    exc=exc,
+                    record_id=item["row"].get(id_column),
+                )
 
 
 def _chunks(items: list[dict[str, Any]], size: int) -> Iterator[list[dict[str, Any]]]:
@@ -447,7 +496,24 @@ def _build_row(entity_type: str, record: dict[str, Any], source: str) -> dict[st
     return row
 
 
-def _finish_batch(store: Any, report: SyncReport, error_message: str | None = None) -> None:
+def _finish_batch(
+    store: Any,
+    report: SyncReport,
+    error_message: str | None = None,
+    failure_payload: dict[str, object] | None = None,
+) -> None:
+    failure_items = failure_payload.get("failures") if failure_payload else None
+    if error_message is None and isinstance(failure_items, list) and failure_items:
+        first_failure = failure_items[0]
+        if isinstance(first_failure, dict):
+            safe_message = " ".join(
+                str(first_failure.get("safe_message") or "").splitlines()
+            )
+            error_message = (
+                f"{failure_payload.get('failure_count')} failure(s); "
+                f"{first_failure.get('stage')} {first_failure.get('error_type')}: "
+                f"{safe_message}"
+            )[:500]
     store.finish_batch(
         report.batch_id,
         report.status,
