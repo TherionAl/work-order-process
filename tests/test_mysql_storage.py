@@ -16,6 +16,7 @@ from work_order_process.mysql_storage import (
     _commit_batch,
     _fetch_batch_details,
     build_ticket_detail_main_row,
+    import_month_tickets_serial,
     import_month_tickets_to_mysql,
 )
 
@@ -149,6 +150,79 @@ class ImportClient:
 
     def fetch_company_fields(self) -> list[dict[str, Any]]:
         return []
+
+
+class SerialImportClient(ImportClient):
+    def fetch_ticket_detail(self, ticket_id: str) -> dict[str, Any]:
+        if ticket_id == "1":
+            raise RuntimeError("temporary API failure")
+        return {
+            "ticketId": ticket_id,
+            "createDT": "2026-07-29 00:00:00",
+        }
+
+
+def test_serial_month_import_preserves_api_and_database_failure_details(
+    monkeypatch,
+) -> None:
+    database_failures = FailureCollector()
+    database_failures.capture(
+        stage="database",
+        exc=RuntimeError("row write failed"),
+        record_id="2",
+    )
+    logged: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        mysql_storage,
+        "_fetch_month_ticket_rows",
+        lambda *args, **kwargs: (
+            "2026-07",
+            [{"ticketId": "1"}, {"ticketId": "2"}],
+            "api",
+        ),
+    )
+    monkeypatch.setattr(mysql_storage, "ensure_mysql_schema", lambda config: None)
+    monkeypatch.setattr(
+        mysql_storage,
+        "_filter_ticket_rows_for_import",
+        lambda *args: (["1", "2"], 0),
+    )
+    monkeypatch.setattr(
+        mysql_storage,
+        "_commit_batch_atomic",
+        lambda *args: {
+            "imported": 0,
+            "updated": 0,
+            "skipped": 0,
+            "failed_ids": ["2"],
+            "failures": database_failures.as_payload()["failures"],
+            "failures_truncated": False,
+            "custom_rows": 0,
+        },
+    )
+    monkeypatch.setattr(
+        mysql_storage,
+        "_write_sync_log",
+        lambda *args, **kwargs: logged.update(kwargs),
+    )
+
+    report = import_month_tickets_serial(
+        MySQLConfig("host", 3306, "user", "password", "database"),
+        None,
+        SerialImportClient(),
+        2026,
+        7,
+    )
+
+    assert report["failed_ids"] == ["1", "2"]
+    assert [failure["stage"] for failure in report["failures"]] == [
+        "api",
+        "database",
+    ]
+    assert report["failures_truncated"] is False
+    assert logged["extra_json"]["failed_ids"] == report["failed_ids"]
+    assert logged["extra_json"]["failures"] == report["failures"]
 
 
 def test_month_import_merges_and_persists_bounded_failures(monkeypatch) -> None:

@@ -411,17 +411,14 @@ def _sync_entities(
             exc=exc,
             record_id=batch_id,
         )
+        reports["failed"] = failures.total
         report = SyncReport(
             batch_id,
             fetched,
-            0,
-            0,
-            0,
-            0,
-            1,
-            "failed",
+            status="failed",
             failures=tuple(failure.as_dict() for failure in failures.failures),
             failures_truncated=failures.total > len(failures.failures),
+            **reports,
         )
         _finish_batch(store, report, failure_payload=failures.as_payload())
         return report

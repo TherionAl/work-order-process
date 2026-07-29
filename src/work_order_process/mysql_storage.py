@@ -801,6 +801,8 @@ def import_month_tickets_serial(
             "skipped": 0,
             "failed": 0,
             "failed_ids": [],
+            "failures": [],
+            "failures_truncated": False,
         }
 
     ensure_mysql_schema(config)
@@ -830,6 +832,8 @@ def import_month_tickets_serial(
             "skipped": already_current,
             "failed": 0,
             "failed_ids": [],
+            "failures": [],
+            "failures_truncated": False,
             "custom_field_rows": 0,
             "duration_seconds": 0,
         }
@@ -840,6 +844,7 @@ def import_month_tickets_serial(
     updated = 0
     skipped = already_current
     failed_ids: list[str] = []
+    failures = FailureCollector()
     total_custom = 0
     started_at = datetime.now()
 
@@ -848,20 +853,43 @@ def import_month_tickets_serial(
             raw_detail = client.fetch_ticket_detail(ticket_id)
             if not raw_detail:
                 failed_ids.append(ticket_id)
+                failures.capture(
+                    stage=API_FAILURE_STAGE,
+                    exc=RuntimeError("ticket detail API returned no record"),
+                    record_id=ticket_id,
+                )
                 continue
             value_detail = resolve_ticket_detail_values(raw_detail, client, field_resolver)
-            detail_map = {ticket_id: (raw_detail, value_detail)}
-            batch_result = _commit_batch_atomic(config, detail_map)
-            imported += batch_result["imported"]
-            updated += batch_result["updated"]
-            skipped += batch_result["skipped"]
-            failed_ids.extend(batch_result["failed_ids"])
-            total_custom += batch_result["custom_rows"]
-        except Exception:
+        except Exception as exc:
             failed_ids.append(ticket_id)
+            failures.capture(
+                stage=API_FAILURE_STAGE,
+                exc=exc,
+                record_id=ticket_id,
+            )
+            continue
+
+        detail_map = {ticket_id: (raw_detail, value_detail)}
+        try:
+            batch_result = _commit_batch_atomic(config, detail_map)
+        except Exception as exc:
+            failed_ids.append(ticket_id)
+            failures.capture(
+                stage=DATABASE_FAILURE_STAGE,
+                exc=exc,
+                record_id=ticket_id,
+            )
+            continue
+        _merge_failure_payload(failures, batch_result)
+        imported += batch_result["imported"]
+        updated += batch_result["updated"]
+        skipped += batch_result["skipped"]
+        failed_ids.extend(batch_result["failed_ids"])
+        total_custom += batch_result["custom_rows"]
 
     duration = int((datetime.now() - started_at).total_seconds())
     overall_status = "success" if not failed_ids else ("partial" if (imported + updated) > 0 else "failed")
+    failure_payload = failures.as_payload()
     _write_sync_log(
         config, task_type="ticket_detail",
         target_year=year, target_month=month, month_label=month_label,
@@ -869,7 +897,11 @@ def import_month_tickets_serial(
         success_count=imported + updated, failed_count=len(failed_ids),
         skipped_count=skipped, duration_seconds=duration,
         error_message=None if overall_status == "success" else f"{len(failed_ids)} 条工单失败",
-        extra_json={"failed_ids": failed_ids} if failed_ids else None,
+        extra_json={
+            "failed_ids": failed_ids,
+            "failures": failure_payload["failures"],
+            "failures_truncated": failure_payload["failures_truncated"],
+        } if failed_ids else None,
     )
 
     return {
@@ -878,6 +910,8 @@ def import_month_tickets_serial(
         "total_in_month": len(ticket_ids),
         "imported": imported, "updated": updated, "skipped": skipped,
         "failed": len(failed_ids), "failed_ids": failed_ids,
+        "failures": failure_payload["failures"],
+        "failures_truncated": failure_payload["failures_truncated"],
         "custom_field_rows": total_custom, "duration_seconds": duration,
     }
 

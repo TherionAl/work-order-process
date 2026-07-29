@@ -119,3 +119,33 @@ def test_bulk_fallback_records_only_final_row_failure() -> None:
     assert report.failed == 1
     assert [failure["record_id"] for failure in report.failures] == ["C2"]
     assert report.failures[0]["stage"] == "database"
+
+
+class LaterPageFailureClient:
+    def iter_companies(self):
+        yield [
+            {"uId": "C1", "companyName": "One"},
+            {"uId": "", "companyName": "missing stable id"},
+        ]
+        raise RuntimeError("later page failed")
+
+
+def test_later_api_failure_preserves_prior_entity_counts_and_failures() -> None:
+    store = FakeStore()
+
+    report = sync_customer_entities(
+        None,
+        LaterPageFailureClient(),
+        sources=["companies"],
+        store=store,
+    )
+
+    assert report.status == "failed"
+    assert report.fetched == 2
+    assert report.raw_saved == 1
+    assert report.inserted == 1
+    assert report.changed == 0
+    assert report.unchanged == 0
+    assert report.failed == 2
+    assert len(report.failures) == report.failed
+    assert [failure["stage"] for failure in report.failures] == ["prepare", "api"]
