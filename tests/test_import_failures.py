@@ -144,3 +144,31 @@ def test_capture_reuses_iterable_secrets_for_record_id_and_message() -> None:
     )
 
     assert "generator-secret" not in failure.safe_message
+
+
+def test_capture_replaces_short_labelled_record_id_payload() -> None:
+    collector = FailureCollector()
+
+    failure = collector.capture(
+        stage="api",
+        record_id="response={'token':'x'}",
+        exc=RuntimeError("timeout"),
+    )
+
+    assert failure.record_id == "[payload redacted]"
+
+
+def test_sanitize_failure_message_replaces_embedded_json_payload() -> None:
+    safe_message = sanitize_failure_message(
+        ValueError('API returned {"token":"x"}'),
+    )
+
+    assert safe_message == "[payload redacted]"
+
+
+def test_sanitize_failure_message_keeps_ordinary_diagnostic_prose() -> None:
+    safe_message = sanitize_failure_message(
+        ValueError("connection timeout after 3 seconds"),
+    )
+
+    assert safe_message == "connection timeout after 3 seconds"

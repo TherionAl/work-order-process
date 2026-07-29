@@ -44,15 +44,19 @@ def _sanitize_text(message: str, *, secrets: Iterable[str]) -> str:
 
 
 def _is_payload(message: str) -> bool:
-    stripped = message.strip()
-    if _SERIALIZED_PAYLOAD_PATTERN.search(message) and len(message) > _MAX_MESSAGE_LENGTH:
+    if _SERIALIZED_PAYLOAD_PATTERN.search(message):
         return True
-    if not (stripped.startswith(("{", "[")) and stripped.endswith(("}", "]"))):
-        return False
-    try:
-        return isinstance(json.loads(stripped), (dict, list))
-    except json.JSONDecodeError:
-        return False
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(message):
+        if character not in "[{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(message[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, (dict, list)):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
