@@ -5,13 +5,23 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Iterable, Sequence
 
 from openpyxl import load_workbook
 
 from .config import MySQLConfig
 from .auxiliary_schema import ensure_auxiliary_schema
+from .import_failures import FailureCollector
 
 logger = logging.getLogger(__name__)
+
+PARSE_FAILURE_STAGE = "customer_account_parse"
+STAGE_FAILURE_STAGE = "customer_account_stage"
+PUBLISH_FAILURE_STAGE = "customer_account_publish"
+
+
+class CustomerAccountImportError(RuntimeError):
+    """Raised when a customer-account snapshot cannot be safely published."""
 
 # Excel 列名 → DB 列名（按顺序对应 Sheet1 的 40 列）
 COLUMN_MAP = [
@@ -63,6 +73,21 @@ INSERT_SQL = (
     + ", create_date) VALUES ("
     + ", ".join(["%s"] * (len(COLUMN_MAP) + 1))
     + ")"
+)
+
+IMPORT_COLUMNS = tuple(column for _, column in COLUMN_MAP) + ("create_date",)
+STAGE_TABLE = "customer_account_import_stage"
+CREATE_STAGE_SQL = (
+    f"CREATE TEMPORARY TABLE {STAGE_TABLE} AS "
+    f"SELECT {', '.join(IMPORT_COLUMNS)} FROM customer_account WHERE 1 = 0"
+)
+STAGE_INSERT_SQL = (
+    f"INSERT INTO {STAGE_TABLE} ({', '.join(IMPORT_COLUMNS)}) VALUES "
+    f"({', '.join(['%s'] * len(IMPORT_COLUMNS))})"
+)
+PUBLISH_STAGE_SQL = (
+    f"INSERT INTO customer_account ({', '.join(IMPORT_COLUMNS)}) "
+    f"SELECT {', '.join(IMPORT_COLUMNS)} FROM {STAGE_TABLE}"
 )
 
 
@@ -118,11 +143,232 @@ CONVERTERS = {
 }
 
 
+def _to_decimal_strict(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    text = str(value).replace(",", "").strip()
+    if not text:
+        return None
+    return float(text)
+
+
+def _to_int_strict(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return int(float(text))
+
+
+STRICT_CONVERTERS = {
+    **{
+        column: _to_decimal_strict
+        for column in (
+            "annual_ops_fee",
+            "detail_amount",
+            "expected_revenue",
+            "expected_collection",
+            "actual_revenue",
+            "actual_collection",
+        )
+    },
+    "contract_count": _to_int_strict,
+    "service_expire_date": _to_date,
+    "contract_apply_date": _to_date,
+    "ops_start_date": _to_date,
+    "ops_end_date": _to_date,
+    "acceptance_date": _to_date,
+}
+
+
 def convert(col_name: str, value) -> object:
     fn = CONVERTERS.get(col_name)
     if fn:
         return fn(value)
     return _to_str(value)
+
+
+def convert_strict(column: str, value: object, *, source_row: int) -> object:
+    """Convert a workbook cell, rejecting malformed nonempty numeric values."""
+    converter = STRICT_CONVERTERS.get(column)
+    if converter is None:
+        return _to_str(value)
+    try:
+        return converter(value)
+    except (TypeError, ValueError) as exc:
+        raise CustomerAccountImportError(
+            f"{column} contains an invalid nonempty value at source row {source_row}"
+        ) from exc
+
+
+def prepare_customer_account_row(
+    values: Sequence[object], *, source_row: int, create_date: str
+) -> list[object] | None:
+    """Strictly convert one source row or discard it under the name-cleaning rule."""
+    prepared = [
+        convert_strict(column, values[index] if index < len(values) else None, source_row=source_row)
+        for index, (_, column) in enumerate(COLUMN_MAP)
+    ]
+    if prepared[1] is None and prepared[2] is None:
+        return None
+    return [*prepared, create_date]
+
+
+def _load_stage_rows(
+    cursor: Any,
+    rows: Iterable[Sequence[object]],
+    *,
+    create_date: str,
+    batch_size: int,
+) -> dict[str, int]:
+    """Strictly validate workbook rows and bulk-load accepted rows into a temp table."""
+    cursor.execute(CREATE_STAGE_SQL)
+    counts = {"rows": 0, "accepted": 0, "inserted": 0, "cleaned": 0}
+    batch: list[list[object]] = []
+    for source_row, values in enumerate(rows, start=2):
+        counts["rows"] += 1
+        prepared = prepare_customer_account_row(
+            values, source_row=source_row, create_date=create_date
+        )
+        if prepared is None:
+            counts["cleaned"] += 1
+            continue
+        counts["accepted"] += 1
+        batch.append(prepared)
+        if len(batch) >= batch_size:
+            cursor.executemany(STAGE_INSERT_SQL, batch)
+            counts["inserted"] += len(batch)
+            batch = []
+    if batch:
+        cursor.executemany(STAGE_INSERT_SQL, batch)
+        counts["inserted"] += len(batch)
+
+    cursor.execute(f"SELECT COUNT(*) FROM {STAGE_TABLE}")
+    staged_rows = cursor.fetchone()[0]
+    if staged_rows != counts["accepted"]:
+        raise CustomerAccountImportError(
+            f"expected {counts['accepted']} staged rows, found {staged_rows}"
+        )
+    return counts
+
+
+def _publish_staged_snapshot(
+    cursor: Any, *, create_date: str, expected_rows: int
+) -> None:
+    """Replace exactly one formal snapshot from the validated temporary stage."""
+    cursor.execute(
+        "DELETE FROM customer_account WHERE create_date = %s", (create_date,)
+    )
+    cursor.execute(PUBLISH_STAGE_SQL)
+    cursor.execute(
+        "SELECT COUNT(*) FROM customer_account WHERE create_date = %s", (create_date,)
+    )
+    published_rows = cursor.fetchone()[0]
+    if published_rows != expected_rows:
+        raise CustomerAccountImportError(
+            f"expected {expected_rows} rows, published {published_rows}"
+        )
+
+
+def _connect(config: MySQLConfig) -> Any:
+    import pymysql
+
+    return pymysql.connect(
+        host=config.host,
+        port=config.port,
+        user=config.user,
+        password=config.password,
+        database=config.database,
+        charset="utf8mb4",
+        autocommit=False,
+    )
+
+
+def _import_customer_account_snapshot(
+    config: MySQLConfig,
+    file_path: Path,
+    create_date: str,
+    sheet_name: str | None,
+    batch_size: int,
+) -> dict:
+    import time
+
+    started = time.time()
+    failures = FailureCollector()
+    conn: Any | None = None
+    wb: Any | None = None
+    current_stage = STAGE_FAILURE_STAGE
+    try:
+        ensure_auxiliary_schema(config)
+        wb = load_workbook(file_path, read_only=True, data_only=True)
+        ws = wb[sheet_name] if sheet_name else wb[wb.sheetnames[0]]
+        workbook_rows = iter(ws.iter_rows(values_only=True))
+        headers = [str(cell).strip() if cell else "" for cell in next(workbook_rows, ())]
+        if headers != [header for header, _ in COLUMN_MAP]:
+            logger.warning("customer account headers differ from the configured column order")
+        conn = _connect(config)
+        with conn.cursor() as cursor:
+            counts = _load_stage_rows(
+                cursor,
+                workbook_rows,
+                create_date=create_date,
+                batch_size=batch_size,
+            )
+            current_stage = PUBLISH_FAILURE_STAGE
+            conn.begin()
+            _publish_staged_snapshot(
+                cursor,
+                create_date=create_date,
+                expected_rows=counts["accepted"],
+            )
+            conn.commit()
+    except CustomerAccountImportError as exc:
+        if conn is not None:
+            conn.rollback()
+        logger.error(
+            "customer account import failed: %s",
+            failures.capture(
+                stage=current_stage,
+                exc=exc,
+                record_id="customer_account_snapshot",
+            ).as_dict(),
+        )
+        raise
+    except Exception as exc:
+        if conn is not None:
+            conn.rollback()
+        logger.error(
+            "customer account import failed: %s",
+            failures.capture(
+                stage=current_stage,
+                exc=exc,
+                record_id="customer_account_snapshot",
+            ).as_dict(),
+        )
+        raise CustomerAccountImportError("customer account import failed") from exc
+    finally:
+        if conn is not None:
+            conn.close()
+        if wb is not None:
+            wb.close()
+
+    seconds = round(time.time() - started, 1)
+    logger.info(
+        "customer account import complete: inserted %d, cleaned %d, seconds %s",
+        counts["inserted"],
+        counts["cleaned"],
+        seconds,
+    )
+    return {
+        "file": file_path.name,
+        **counts,
+        "skipped": 0,
+        "failed": failures.total,
+        "seconds": seconds,
+        "create_date": create_date,
+        **failures.as_payload(),
+    }
 
 
 def import_customer_account_xlsx(
@@ -136,82 +382,9 @@ def import_customer_account_xlsx(
 
     返回 {"file": ..., "rows": ..., "inserted": ..., "skipped": ..., "seconds": ...}
     """
-    import pymysql
-    import time
-
-    ensure_auxiliary_schema(config)
-    logger.info("打开文件: %s", file_path)
-    wb = load_workbook(file_path, read_only=True, data_only=True)
-    ws = wb[sheet_name] if sheet_name else wb[wb.sheetnames[0]]
-
-    headers: list[str] = []
-    inserted = 0
-    skipped = 0
-    cleaned = 0
-    started = time.time()
-
-    conn = pymysql.connect(
-        host=config.host,
-        port=config.port,
-        user=config.user,
-        password=config.password,
-        database=config.database,
-        charset="utf8mb4",
-        autocommit=False,
+    return _import_customer_account_snapshot(
+        config, file_path, create_date, sheet_name, batch_size
     )
-
-    try:
-        with conn.cursor() as cursor:
-            for i, row in enumerate(ws.iter_rows(values_only=True)):
-                if i == 0:
-                    headers = [str(c).strip() if c else "" for c in row]
-                    if headers != [cn for cn, _ in COLUMN_MAP]:
-                        logger.warning("Excel 列头不完全匹配定义，仍按列顺序映射")
-                    continue
-
-                db_values = []
-                for j, (_, col) in enumerate(COLUMN_MAP):
-                    val = row[j] if j < len(row) else None
-                    db_values.append(convert(col, val))
-
-                # 数据清洗：合同签约客户、最终使用客户都为空则跳过
-                if db_values[1] is None and db_values[2] is None:
-                    cleaned += 1
-                    continue
-
-                db_values.append(create_date)
-
-                try:
-                    cursor.execute(INSERT_SQL, db_values)
-                    if cursor.rowcount:
-                        inserted += 1
-                    else:
-                        skipped += 1
-                except Exception:
-                    skipped += 1
-
-                if (i % batch_size) == 0:
-                    conn.commit()
-                    logger.info("已处理 %d 行 ...", i)
-
-        conn.commit()
-    finally:
-        conn.close()
-        wb.close()
-
-    seconds = round(time.time() - started, 1)
-    logger.info(
-        "导入完成: 插入 %d, 跳过 %d, 清洗 %d, 耗时 %ss",
-        inserted, skipped, cleaned, seconds,
-    )
-    return {
-        "file": file_path.name,
-        "rows": i - 1 if i else 0,
-        "inserted": inserted,
-        "skipped": skipped,
-        "cleaned": cleaned,
-        "seconds": seconds,
-    }
 
 
 def main():

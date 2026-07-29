@@ -1147,6 +1147,15 @@ ERP 发布总控：
 - `work_order_process.customer_account_import.convert`：按目标列选择转换器。
 - `work_order_process.customer_account_import.import_customer_account_xlsx`：客户台账批量入库。
 - `work_order_process.customer_account_import.main`：脚本式客户台账入口。
+- `work_order_process.customer_account_import.CustomerAccountImportError`：快照发布不安全时抛出的导入错误。
+- `work_order_process.customer_account_import._to_decimal_strict`：严格金额转换器。
+- `work_order_process.customer_account_import._to_int_strict`：严格整数转换器。
+- `work_order_process.customer_account_import.convert_strict`：带源行号的严格字段转换。
+- `work_order_process.customer_account_import.prepare_customer_account_row`：清洗并准备一行客户台账快照数据。
+- `work_order_process.customer_account_import._load_stage_rows`：检查并批量加载临时快照存储。
+- `work_order_process.customer_account_import._publish_staged_snapshot`：在事务中替换指定日期的正式快照。
+- `work_order_process.customer_account_import._connect`：创建客户台账数据库连接。
+- `work_order_process.customer_account_import._import_customer_account_snapshot`：协调安全的暂存与发布导入。
 
 #### 辅助表：`work_order_process.auxiliary_schema`
 

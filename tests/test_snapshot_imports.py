@@ -34,6 +34,11 @@ def test_customer_account_mapping_matches_server_snapshot_columns() -> None:
     assert convert_customer_account("annual_ops_fee", "1,234.50") == 1234.5
 
 
+def test_customer_account_legacy_convert_remains_permissive() -> None:
+    """Existing callers retain the old NULL-on-invalid conversion contract."""
+    assert convert_customer_account("annual_ops_fee", "not a number") is None
+
+
 def test_erp_import_reuses_baseline_sales_platform_for_existing_line() -> None:
     row = {
         "contract_id": "HT-001",
