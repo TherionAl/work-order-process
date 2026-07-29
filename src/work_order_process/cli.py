@@ -132,15 +132,8 @@ def main() -> None:
 
     parser = build_parser()
     args = parser.parse_args()
-    try:
-        settings = load_settings()
-        dispatch_command(args, settings, parser)
-    except ApiError as exc:
-        console.print(f"[red]接口错误：[/red] {exc}")
-        raise SystemExit(2) from exc
-    except ConfigError as exc:
-        console.print(f"[red]配置错误:[/red] {exc}")
-        raise SystemExit(3) from exc
+    settings = load_settings()
+    dispatch_command(args, settings, parser)
 
 
 def _resolve_sources(source_arg: str, both: list[str]) -> tuple[str, ...]:

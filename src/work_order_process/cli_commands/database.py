@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import argparse
 
-from ..config import Settings
+from ..api import ApiError
+from ..config import ConfigError, Settings
 
 
 COMMANDS = frozenset(
@@ -76,6 +77,8 @@ def handle(args: argparse.Namespace, settings: Settings, parser: argparse.Argume
     if args.command in _SCHEMA_MUTATING_COMMANDS:
         cli.assert_schema_current(settings.mysql)
 
+    cli.DataDictionary.from_pdf(settings.dictionary_path)
+
     if args.command == "mysql-create-analysis-views":
         cli.create_customer_contact_analysis_views(settings.mysql)
         cli.console.print("[green]客户/联系人分析视图已创建。[/green]")
@@ -90,8 +93,15 @@ def handle(args: argparse.Namespace, settings: Settings, parser: argparse.Argume
         else:
             cli.console.print("[dim]所有月份分区均已存在，无需新建。[/dim]")
     else:
-        with cli.WorkOrderClient(settings) as client:
-            client.authenticate()
-            cli._print_sync_log(settings)
+        try:
+            with cli.WorkOrderClient(settings) as client:
+                client.authenticate()
+                cli._print_sync_log(settings)
+        except ApiError as exc:
+            cli.console.print(f"[red]接口错误：[/red] {exc}")
+            raise SystemExit(2) from exc
+        except ConfigError as exc:
+            cli.console.print(f"[red]配置错误:[/red] {exc}")
+            raise SystemExit(3) from exc
 
     return True

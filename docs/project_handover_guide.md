@@ -1003,6 +1003,15 @@ ERP 发布总控：
 - `work_order_process.cli.main`：CLI 总入口。
 - `work_order_process.cli.build_parser`：构造可复用参数解析器。
 - `work_order_process.cli.dispatch_command`：分派已解析的命令。
+- `work_order_process.cli_commands.__init__`：CLI 命令处理器子包标识。
+- `work_order_process.cli_commands.database`：数据库生命周期与维护命令。
+- `work_order_process.cli_commands.database.handle`：处理数据库命令。
+- `work_order_process.cli_commands.imports`：MySQL 导入命令。
+- `work_order_process.cli_commands.imports.handle`：处理导入命令。
+- `work_order_process.cli_commands.exports`：导出、报表和指标命令。
+- `work_order_process.cli_commands.exports.handle`：处理导出与报表命令。
+- `work_order_process.cli_commands.diagnostics`：只读诊断命令。
+- `work_order_process.cli_commands.diagnostics.handle`：处理诊断命令。
 - `work_order_process.cli._resolve_sources`：解析单/多来源。
 - `work_order_process.cli._print_sync_log`：显示同步日志。
 - `work_order_process.cli._print_erp_import_report`：ERP 报告。

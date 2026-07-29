@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 
-from ..api import WorkOrderClient
-from ..config import Settings
+from ..api import ApiError, WorkOrderClient
+from ..config import ConfigError, Settings
 from ..dictionary import DataDictionary
 
 
@@ -35,21 +35,32 @@ def handle(args: argparse.Namespace, settings: Settings, parser: argparse.Argume
         _print_dictionary_summary(dictionary)
         return True
 
-    with WorkOrderClient(settings) as client:
-        client.authenticate()
-        if args.command == "mysql-probe-customers":
-            _print_entity_probe(
-                client.probe_entity_paths(
-                    settings.endpoint.customer_paths, "customer", args.sample_size,
+    try:
+        with WorkOrderClient(settings) as client:
+            client.authenticate()
+            if args.command == "mysql-probe-customers":
+                _print_entity_probe(
+                    client.probe_entity_paths(
+                        settings.endpoint.customer_paths, "customer", args.sample_size,
+                    )
                 )
-            )
-        elif args.command == "mysql-probe-contacts":
-            _print_entity_probe(
-                client.probe_entity_paths(
-                    settings.endpoint.contact_paths, "contact", args.sample_size,
+            elif args.command == "mysql-probe-contacts":
+                _print_entity_probe(
+                    client.probe_entity_paths(
+                        settings.endpoint.contact_paths, "contact", args.sample_size,
+                    )
                 )
-            )
-        else:
-            _probe(client)
+            else:
+                _probe(client)
+    except ApiError as exc:
+        from .. import cli
+
+        cli.console.print(f"[red]接口错误：[/red] {exc}")
+        raise SystemExit(2) from exc
+    except ConfigError as exc:
+        from .. import cli
+
+        cli.console.print(f"[red]配置错误:[/red] {exc}")
+        raise SystemExit(3) from exc
 
     return True

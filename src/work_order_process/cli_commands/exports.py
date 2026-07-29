@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 
 from ..api import ApiError, WorkOrderClient
-from ..config import Settings
+from ..config import ConfigError, Settings
 from ..dictionary import DataDictionary
 from ..monthly_export import (
     export_month_template_samples,
@@ -46,6 +46,10 @@ def handle(args: argparse.Namespace, settings: Settings, parser: argparse.Argume
 
     if args.command == "generate-revenue-summary":
         assert_schema_current(settings.mysql)
+
+    dictionary = DataDictionary.from_pdf(settings.dictionary_path)
+
+    if args.command == "generate-revenue-summary":
         if args.month is None:
             raise ApiError("generate-revenue-summary 需要传入 --month。")
         if not args.revenue_target_file:
@@ -95,49 +99,59 @@ def handle(args: argparse.Namespace, settings: Settings, parser: argparse.Argume
         _print_time_metric_report(report)
         return True
 
-    dictionary = DataDictionary.from_pdf(settings.dictionary_path)
-    with WorkOrderClient(settings) as client:
-        client.authenticate()
-        if args.command == "template-samples":
-            if args.month is None:
-                raise ApiError("Please pass --month for template-samples.")
-            report = export_month_template_samples(
-                settings.output_dir,
-                dictionary,
-                client,
-                year=args.year,
-                month=args.month,
-                sample_size=args.sample_size,
-                seed=args.seed,
-                overwrite=args.overwrite,
-                detail_workers=args.detail_workers,
-            )
-            _print_template_sample_report(report)
-        elif args.command == "monthly-tickets":
-            report = export_year_monthly_tickets(
-                settings.output_dir,
-                client,
-                year=args.year,
-                months=[args.month] if args.month is not None else None,
-                per_page=args.per_page,
-                limit_per_month=args.limit_per_month,
-                overwrite=args.overwrite,
-            )
-            _print_monthly_ticket_report(report)
-        else:
-            report = export_year_monthly_tickets_and_samples(
-                settings.output_dir,
-                dictionary,
-                client,
-                year=args.year,
-                months=[args.month] if args.month is not None else None,
-                sample_size=args.sample_size,
-                seed=args.seed,
-                per_page=args.per_page,
-                limit_per_month=args.limit_per_month,
-                overwrite=args.overwrite,
-                detail_workers=args.detail_workers,
-            )
-            _print_year_report(report)
+    try:
+        with WorkOrderClient(settings) as client:
+            client.authenticate()
+            if args.command == "template-samples":
+                if args.month is None:
+                    raise ApiError("Please pass --month for template-samples.")
+                report = export_month_template_samples(
+                    settings.output_dir,
+                    dictionary,
+                    client,
+                    year=args.year,
+                    month=args.month,
+                    sample_size=args.sample_size,
+                    seed=args.seed,
+                    overwrite=args.overwrite,
+                    detail_workers=args.detail_workers,
+                )
+                _print_template_sample_report(report)
+            elif args.command == "monthly-tickets":
+                report = export_year_monthly_tickets(
+                    settings.output_dir,
+                    client,
+                    year=args.year,
+                    months=[args.month] if args.month is not None else None,
+                    per_page=args.per_page,
+                    limit_per_month=args.limit_per_month,
+                    overwrite=args.overwrite,
+                )
+                _print_monthly_ticket_report(report)
+            else:
+                report = export_year_monthly_tickets_and_samples(
+                    settings.output_dir,
+                    dictionary,
+                    client,
+                    year=args.year,
+                    months=[args.month] if args.month is not None else None,
+                    sample_size=args.sample_size,
+                    seed=args.seed,
+                    per_page=args.per_page,
+                    limit_per_month=args.limit_per_month,
+                    overwrite=args.overwrite,
+                    detail_workers=args.detail_workers,
+                )
+                _print_year_report(report)
+    except ApiError as exc:
+        from .. import cli
+
+        cli.console.print(f"[red]接口错误：[/red] {exc}")
+        raise SystemExit(2) from exc
+    except ConfigError as exc:
+        from .. import cli
+
+        cli.console.print(f"[red]配置错误:[/red] {exc}")
+        raise SystemExit(3) from exc
 
     return True
