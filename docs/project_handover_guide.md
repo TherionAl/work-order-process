@@ -1123,6 +1123,29 @@ ERP 发布总控：
 - `work_order_process.mysql_storage._fetch_batch_details`：并发取原始和解析详情。
 - `work_order_process.mysql_storage._commit_batch`：批量写入并按需逐行定位。
 
+#### 同步日志：`work_order_process.sync_log`
+
+- `work_order_process.sync_log._json_or_none`：将扩展信息编码为可写入的 JSON。
+- `work_order_process.sync_log.write_sync_log`：写入一条同步任务日志。
+- `work_order_process.sync_log.read_sync_logs`：读取数量受限的最新同步日志。
+
+#### 工单导入编排：`work_order_process.ticket_import`
+
+- `work_order_process.ticket_import._fetch_month_ticket_rows`：获取一个月的工单列表。
+- `work_order_process.ticket_import.import_month_tickets_serial`：串行导入单月工单。
+- `work_order_process.ticket_import.import_month_tickets_to_mysql`：并发批量导入单月工单。
+- `work_order_process.ticket_import._prefetch_ticket_entities`：预取工单引用的实体。
+- `work_order_process.ticket_import._str_or_none`：规范化可选标识文本。
+- `work_order_process.ticket_import._filter_ticket_rows_for_import`：过滤已是当前版本的工单。
+- `work_order_process.ticket_import._same_datetime`：按秒比较更新时间。
+- `work_order_process.ticket_import._commit_batch_atomic`：用独立事务提交一批工单。
+- `work_order_process.ticket_import._fetch_batch_details`：并发获取并解析详情。
+- `work_order_process.ticket_import._commit_batch`：批量写入并按行回退定位失败。
+- `work_order_process.ticket_import._merge_failure_collectors`：合并受限的失败收集器。
+- `work_order_process.ticket_import._merge_failure_payload`：合并批次失败负载。
+- `work_order_process.ticket_import._safe_rollback`：在可用时回滚连接。
+- `work_order_process.ticket_import.import_year_tickets_to_mysql`：按月编排年度工单导入。
+
 #### 版本化迁移：`work_order_process.schema_migrations`
 
 - `work_order_process.schema_migrations.Migration`：不可变迁移元数据和行为。
