@@ -21,12 +21,12 @@ import math
 import random
 import re
 import threading
-import time
 from typing import Any, Callable, Iterator, TypedDict
 
 import httpx
 
 from .config import Settings
+from .api_transport import request_with_retry
 
 
 class ApiError(RuntimeError):
@@ -738,20 +738,7 @@ class WorkOrderClient:
     def _request(self, method: str, path: str, data: dict[str, Any]) -> httpx.Response:
         """发起 GET/POST 请求；网络抖动时最多重试 3 次。"""
 
-        last_error: httpx.HTTPError | None = None
-        for attempt in range(3):
-            try:
-                if method == "GET":
-                    return self.client.get(path, params=data)
-                if method == "POST":
-                    return self.client.post(path, data=data)
-            except httpx.HTTPError as exc:
-                last_error = exc
-                if attempt < 2:
-                    time.sleep(1.5 * (attempt + 1))
-                    continue
-                raise
-        raise ApiError(f"Unsupported HTTP method: {method}")
+        return request_with_retry(self.client, method, path, data)
 
 
 def _json_or_empty(response: httpx.Response) -> Any:

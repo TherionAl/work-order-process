@@ -700,6 +700,7 @@ uv run --all-groups work_order_process metric-ticket `
 | 模块 | 职责 | 主要副作用 |
 |---|---|---|
 | `work_order_process.api` | 工单 API 认证、探测、分页、详情和缓存 | HTTP 请求 |
+| `work_order_process.api_transport` | HTTP 请求发送、瞬时故障重试和退避计算 | HTTP 请求、短暂等待 |
 | `work_order_process.config` | `.env`、端点和 MySQL 配置 | 读取环境变量 |
 | `work_order_process.cli` | 通用命令路由和终端输出 | 取决于子命令 |
 | `work_order_process.dictionary` | PDF 数据字典解析和中文化 | 读 PDF、写 JSON |
@@ -945,6 +946,16 @@ ERP 发布总控：
 - `work_order_process.api._record_is_since`：按起始日期筛选。
 - `work_order_process.api._record_datetime`：读取记录时间。
 - `work_order_process.api._parse_datetime`：解析常见时间格式。
+
+#### API 传输：`work_order_process.api_transport`
+
+- `work_order_process.api_transport`：受控 HTTP 传输模块。
+- `work_order_process.api_transport.ApiTransportError`：不支持的 HTTP 方法错误。
+- `work_order_process.api_transport.RetryPolicy`：重试次数、状态码和退避参数。
+- `work_order_process.api_transport.retry_delay`：优先解析 `Retry-After`，否则计算有上限的指数退避与抖动。
+- `work_order_process.api_transport.request_with_retry`：按 GET 查询参数和 POST 表单数据发送请求，并仅重试瞬时错误。
+- `work_order_process.api_transport._send_request`：按 HTTP 方法调用客户端。
+- `work_order_process.api_transport._retry_after_seconds`：解析合法的 `Retry-After` 秒数。
 
 #### 配置和入口
 

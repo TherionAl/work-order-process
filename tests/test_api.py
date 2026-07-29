@@ -2,6 +2,7 @@ from pathlib import Path
 
 import httpx
 
+from work_order_process import api
 from work_order_process.api import WorkOrderClient
 from work_order_process.config import EndpointConfig, MySQLConfig, Settings
 
@@ -31,6 +32,24 @@ def _settings() -> Settings:
             database="work_order",
         ),
     )
+
+
+def test_work_order_client_request_delegates_to_transport(monkeypatch) -> None:
+    client = WorkOrderClient(_settings())
+    expected = httpx.Response(200, json={"ok": True})
+    calls = []
+    monkeypatch.setattr(
+        api,
+        "request_with_retry",
+        lambda http, method, path, data: calls.append(
+            (http, method, path, data)
+        )
+        or expected,
+    )
+
+    assert client._request("GET", "/tickets", {"page": 1}) is expected
+    assert calls == [(client.client, "GET", "/tickets", {"page": 1})]
+    client.close()
 
 
 def test_fetch_support_detail_uses_client_cache(monkeypatch) -> None:
