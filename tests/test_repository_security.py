@@ -35,6 +35,15 @@ def test_ci_runs_locked_python_314_test_suite() -> None:
     assert "uv run --all-groups pytest -q" in text
 
 
+def test_ci_runs_lint_format_and_coverage_gate() -> None:
+    text = (PROJECT_ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
+
+    assert "ruff check src tests" in text
+    assert "ruff format --check src tests" in text
+    assert "--cov=work_order_process" in text
+    assert "--cov-fail-under=70" in text
+
+
 def test_readme_local_document_links_exist() -> None:
     text = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     links = re.findall(r"\[[^\]]+\]\(([^)]+)\)", text)

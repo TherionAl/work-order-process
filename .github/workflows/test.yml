@@ -23,5 +23,11 @@ jobs:
         run: uv sync --all-groups --locked
       - name: Check repository security rules
         run: uv run --all-groups pytest tests/test_repository_security.py -q
+      - name: Check formatting
+        run: uv run --all-groups ruff format --check src tests
+      - name: Lint
+        run: uv run --all-groups ruff check src tests
+      - name: Run tests with coverage
+        run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
       - name: Run tests
         run: uv run --all-groups pytest -q
