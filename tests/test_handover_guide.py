@@ -236,12 +236,13 @@ def _assert_truth_and_prohibitions(
 def _fenced_code_blocks(text: str) -> list[list[str]]:
     blocks: list[list[str]] = []
     active: list[str] | None = None
+    fence = re.compile(r"^ {0,3}```")
     for line in text.splitlines():
         if active is None:
-            if line.startswith("```"):
+            if fence.match(line):
                 active = []
             continue
-        if line.startswith("```"):
+        if fence.match(line):
             blocks.append([command for command in active if command])
             active = None
         else:
@@ -370,6 +371,26 @@ def test_quality_gate_helper_rejects_an_external_partial_block(opening_fence: st
             f"{opening_fence}\nuv run work_order_process --help\n```\n",
             QUALITY_GATE_COMMANDS,
         )
+
+
+@pytest.mark.parametrize("opening_indent", range(4))
+@pytest.mark.parametrize("closing_indent", range(4))
+def test_quality_gate_helper_scans_commonmark_indented_fences(
+    opening_indent: int, closing_indent: int
+) -> None:
+    command = "uv run work_order_process --help"
+    text = f"{' ' * opening_indent}```sh\n{command}\n{' ' * closing_indent}```\n"
+
+    assert _fenced_code_blocks(text) == [[command]]
+    with pytest.raises(AssertionError, match=re.escape(command)):
+        _assert_no_quality_commands_outside_authority(text, QUALITY_GATE_COMMANDS)
+
+
+def test_four_space_fences_do_not_change_fenced_block_state() -> None:
+    command = "uv run work_order_process --help"
+    text = f"    ```sh\nignored outside block\n    ```\n```sh\n    ```\n{command}\n   ```\n"
+
+    assert _fenced_code_blocks(text) == [["    ```", command]]
 
 
 def test_production_template_syncs_runtime_dependencies_before_restart() -> None:
