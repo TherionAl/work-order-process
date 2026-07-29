@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -31,18 +32,17 @@ def _assert_quality_tools_development_only(config: dict[str, Any]) -> None:
     assert not runtime_overlap, f"quality tools present in runtime dependencies: {runtime_overlap}"
 
 
-def _gitignore_patterns(text: str) -> set[str]:
-    return {
-        line.strip()
-        for line in text.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    }
-
-
-def _assert_coverage_artifacts_ignored(text: str) -> None:
-    patterns = _gitignore_patterns(text)
-    assert ".coverage" in patterns
-    assert "htmlcov/" in patterns
+def _git_path_is_ignored(root: Path, candidate: str) -> bool:
+    result = subprocess.run(
+        ["git", "check-ignore", "--no-index", "--quiet", "--", candidate],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert result.returncode in {0, 1}, result.stderr
+    return result.returncode == 0
 
 
 def test_erp_analysis_dependencies_are_not_default_runtime_dependencies() -> None:
@@ -61,10 +61,18 @@ def test_quality_tools_are_development_only() -> None:
     _assert_quality_tools_development_only(_pyproject())
 
 
-def test_coverage_runtime_file_is_ignored() -> None:
-    text = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
+def test_yaml_parser_is_development_only() -> None:
+    config = _pyproject()
+    dev_names = _requirement_names(config["dependency-groups"]["dev"])
+    runtime_names = _requirement_names(config["project"]["dependencies"])
 
-    _assert_coverage_artifacts_ignored(text)
+    assert "pyyaml" in dev_names
+    assert "pyyaml" not in runtime_names
+
+
+def test_coverage_runtime_file_is_ignored() -> None:
+    assert _git_path_is_ignored(PROJECT_ROOT, ".coverage")
+    assert _git_path_is_ignored(PROJECT_ROOT, "htmlcov/.sentinel")
 
 
 @pytest.mark.parametrize(
@@ -97,13 +105,19 @@ def test_quality_contract_rejects_runtime_quality_tools(runtime_tool: str) -> No
 
 
 @pytest.mark.parametrize(
-    "gitignore_text",
+    ("gitignore_text", "candidate"),
     [
-        "# .coverage\nhtmlcov/\n",
-        ".coverage.disabled\nhtmlcov/\n",
-        ".coverage\nhtmlcov.disabled/\n",
+        (".coverage\n!.coverage\n", ".coverage"),
+        (" .coverage\n", ".coverage"),
+        ("htmlcov/\n!htmlcov/\n", "htmlcov/.sentinel"),
     ],
 )
-def test_coverage_ignore_contract_rejects_non_exact_patterns(gitignore_text: str) -> None:
-    with pytest.raises(AssertionError):
-        _assert_coverage_artifacts_ignored(gitignore_text)
+def test_git_ignore_contract_rejects_negation_and_leading_whitespace(
+    tmp_path: Path,
+    gitignore_text: str,
+    candidate: str,
+) -> None:
+    subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text(gitignore_text, encoding="utf-8")
+
+    assert not _git_path_is_ignored(tmp_path, candidate)

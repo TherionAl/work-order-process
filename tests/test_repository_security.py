@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import json
 import re
 import subprocess
-import tomllib
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
+from coverage import Coverage
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TEXT_SUFFIXES = {"", ".md", ".py", ".toml", ".yml", ".yaml"}
@@ -21,91 +21,54 @@ COVERAGE_DENOMINATOR_FILTERS = {
     "exclude_lines",
     "include",
     "omit",
+    "partial_also",
     "partial_branches",
+    "partial_branches_always",
 }
+COVERAGE_DEFAULT_FILTER_OPTIONS = (
+    "report:exclude_lines",
+    "report:partial_branches",
+    "report:partial_branches_always",
+)
 
 
-def _pyproject() -> dict[str, Any]:
-    with (PROJECT_ROOT / "pyproject.toml").open("rb") as file:
-        return tomllib.load(file)
+def _job_enforces_quality_commands(job: object) -> bool:
+    if not isinstance(job, dict):
+        return False
+    if "if" in job:
+        return False
+    steps = job.get("steps")
+    if not isinstance(steps, list):
+        return False
 
-
-def _yaml_plain_scalar(text: str) -> str:
-    in_single_quote = False
-    in_double_quote = False
-    escaped = False
-    for index, char in enumerate(text):
-        if char == "\\" and in_double_quote and not escaped:
-            escaped = True
-            continue
-        if char == "'" and not in_double_quote:
-            in_single_quote = not in_single_quote
-        elif char == '"' and not in_single_quote and not escaped:
-            in_double_quote = not in_double_quote
-        elif char == "#" and not in_single_quote and not in_double_quote:
-            if index == 0 or text[index - 1].isspace():
-                text = text[:index]
-                break
-        escaped = False
-
-    value = text.strip()
-    if len(value) >= 2 and value[0] == value[-1] == "'":
-        return value[1:-1].replace("''", "'")
-    if len(value) >= 2 and value[0] == value[-1] == '"':
-        return json.loads(value)
-    return value
-
-
-def _workflow_step_run_commands(workflow: str) -> list[str]:
-    commands: list[str] = []
-    steps_indent: int | None = None
-    item_indent: int | None = None
-    in_step = False
-
-    for line in workflow.splitlines():
-        stripped = line.lstrip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        indent = len(line) - len(stripped)
-
-        if steps_indent is None:
-            if re.fullmatch(r"steps:\s*(?:#.*)?", stripped):
-                steps_indent = indent
-            continue
-        if indent <= steps_indent:
-            steps_indent = None
-            item_indent = None
-            in_step = False
-            continue
-
-        step_item = re.fullmatch(r"-\s*(.*)", stripped)
-        if item_indent is None and step_item:
-            item_indent = indent
-        if item_indent is None:
-            continue
-        if indent == item_indent and step_item:
-            in_step = True
-            inline_run = re.fullmatch(r"run:\s*(.+)", step_item.group(1))
-            if inline_run:
-                commands.append(_yaml_plain_scalar(inline_run.group(1)))
-            continue
-        if not in_step or indent <= item_indent:
-            continue
-
-        run_scalar = re.fullmatch(r"run:\s*(.+)", stripped)
-        if run_scalar:
-            commands.append(_yaml_plain_scalar(run_scalar.group(1)))
-
-    return commands
-
-
-def _assert_ci_quality_commands(commands: list[str]) -> None:
     cursor = 0
     for expected in CI_QUALITY_COMMANDS:
-        try:
-            cursor = commands.index(expected, cursor) + 1
-        except ValueError as exc:
-            raise AssertionError(f"missing or out-of-order CI command: {expected}") from exc
+        for index in range(cursor, len(steps)):
+            step = steps[index]
+            if not isinstance(step, dict):
+                continue
+            run = step.get("run")
+            if not isinstance(run, str) or run.strip() != expected:
+                continue
+            if "if" in step:
+                continue
+            if step.get("continue-on-error", False) is not False:
+                continue
+            cursor = index + 1
+            break
+        else:
+            return False
+    return True
+
+
+def _assert_ci_quality_workflow(workflow: str) -> None:
+    parsed = yaml.safe_load(workflow)
+    assert isinstance(parsed, dict), "workflow must be a YAML mapping"
+    jobs = parsed.get("jobs")
+    assert isinstance(jobs, dict), "workflow must define a jobs mapping"
+    assert any(_job_enforces_quality_commands(job) for job in jobs.values()), (
+        "one CI job must enforce exact format, lint, and coverage commands in order"
+    )
 
 
 def _assert_coverage_configuration(config: dict[str, Any]) -> None:
@@ -119,6 +82,34 @@ def _assert_coverage_configuration(config: dict[str, Any]) -> None:
     for section_name, section in (("run", run), ("report", report)):
         narrowing = COVERAGE_DENOMINATOR_FILTERS & section.keys()
         assert not narrowing, f"coverage.{section_name} narrows the denominator: {narrowing}"
+
+
+def _load_effective_coverage_configuration() -> Coverage:
+    coverage = Coverage(config_file=True)
+    coverage.load()
+    return coverage
+
+
+def _assert_effective_coverage_configuration(coverage: Coverage) -> None:
+    defaults = Coverage(config_file=False)
+    defaults.load()
+
+    assert coverage.get_option("run:branch") is True
+    assert coverage.get_option("run:source") == ["work_order_process"]
+    assert coverage.get_option("report:fail_under") == 70
+    for option in (
+        "run:omit",
+        "run:include",
+        "report:omit",
+        "report:include",
+        "report:exclude_also",
+        "report:partial_also",
+    ):
+        assert not coverage.get_option(option), f"effective coverage option must be empty: {option}"
+    for option in COVERAGE_DEFAULT_FILTER_OPTIONS:
+        assert coverage.get_option(option) == defaults.get_option(option), (
+            f"effective coverage option must retain only built-in defaults: {option}"
+        )
 
 
 def test_tracked_text_files_do_not_contain_known_credentials() -> None:
@@ -148,23 +139,28 @@ def test_ci_runs_locked_python_314_test_suite() -> None:
     assert "uv run --all-groups pytest -q" in text
 
 
-def test_ci_runs_lint_format_and_coverage_gate() -> None:
+def test_ci_runs_lint_format_and_coverage_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     text = (PROJECT_ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
 
-    _assert_ci_quality_commands(_workflow_step_run_commands(text))
-    _assert_coverage_configuration(_pyproject())
+    _assert_ci_quality_workflow(text)
+    monkeypatch.delenv("COVERAGE_RCFILE", raising=False)
+    monkeypatch.chdir(PROJECT_ROOT)
+    _assert_effective_coverage_configuration(_load_effective_coverage_configuration())
 
 
 def test_ci_run_extractor_ignores_comments() -> None:
     workflow = """jobs:
   pytest:
     steps:
+      # - run: uv run --all-groups ruff format --check src tests
       # - run: uv run --all-groups ruff check src tests
+      # - run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
       - name: Actual step
         run: uv run --all-groups pytest -q
 """
 
-    assert _workflow_step_run_commands(workflow) == ["uv run --all-groups pytest -q"]
+    with pytest.raises(AssertionError):
+        _assert_ci_quality_workflow(workflow)
 
 
 @pytest.mark.parametrize(
@@ -179,8 +175,11 @@ def test_ci_run_extractor_ignores_comments() -> None:
     ],
 )
 def test_ci_contract_rejects_wrong_order_and_non_exact_commands(commands: list[str]) -> None:
+    steps = "".join(f"      - run: {command}\n" for command in commands)
+    workflow = f"jobs:\n  quality:\n    steps:\n{steps}"
+
     with pytest.raises(AssertionError):
-        _assert_ci_quality_commands(commands)
+        _assert_ci_quality_workflow(workflow)
 
 
 @pytest.mark.parametrize(
@@ -189,6 +188,8 @@ def test_ci_contract_rejects_wrong_order_and_non_exact_commands(commands: list[s
         ("run", "omit", ["work_order_process/cli.py"]),
         ("report", "include", ["work_order_process/api.py"]),
         ("report", "exclude_also", ["if TYPE_CHECKING:"]),
+        ("report", "partial_also", ["if debug:"]),
+        ("report", "partial_branches_always", ["if debug:"]),
     ],
 )
 def test_coverage_contract_rejects_denominator_narrowing(
@@ -208,6 +209,118 @@ def test_coverage_contract_rejects_denominator_narrowing(
 
     with pytest.raises(AssertionError):
         _assert_coverage_configuration(config)
+
+
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        """jobs:
+  quality:
+    steps:
+      - name: Nested keys are not steps
+        env:
+          run: uv run --all-groups ruff format --check src tests
+        with:
+          run: uv run --all-groups ruff check src tests
+        run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
+""",
+        """jobs:
+  format:
+    steps:
+      - run: uv run --all-groups ruff format --check src tests
+  tests:
+    steps:
+      - run: uv run --all-groups ruff check src tests
+      - run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
+""",
+        """jobs:
+  quality:
+    steps:
+      - run: uv run --all-groups ruff format --check src tests
+        if: false
+      - run: uv run --all-groups ruff check src tests
+      - run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
+""",
+        """jobs:
+  quality:
+    steps:
+      - run: uv run --all-groups ruff format --check src tests
+      - run: uv run --all-groups ruff check src tests
+        continue-on-error: true
+      - run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
+""",
+        """jobs:
+  quality:
+    if: false
+    steps:
+      - run: uv run --all-groups ruff format --check src tests
+      - run: uv run --all-groups ruff check src tests
+      - run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
+""",
+        """jobs:
+  quality:
+    steps:
+      - name: Block content cannot create step keys
+        env:
+          SCRIPT: |
+            run: uv run --all-groups ruff format --check src tests
+            run: uv run --all-groups ruff check src tests
+        run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
+""",
+    ],
+)
+def test_ci_contract_rejects_nested_cross_job_and_bypass_mutations(workflow: str) -> None:
+    with pytest.raises(AssertionError):
+        _assert_ci_quality_workflow(workflow)
+
+
+def test_ci_contract_accepts_literal_and_folded_run_scalars() -> None:
+    workflow = """jobs:
+  quality:
+    steps:
+      - run: |
+          uv run --all-groups ruff format --check src tests
+      - run: >-
+          uv run --all-groups ruff check
+          src tests
+      - run: >-
+          uv run --all-groups pytest
+          --cov=work_order_process --cov-fail-under=70 -q
+"""
+
+    _assert_ci_quality_workflow(workflow)
+
+
+def test_effective_coverage_contract_rejects_higher_priority_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """[tool.coverage.run]
+branch = true
+source = ["work_order_process"]
+
+[tool.coverage.report]
+fail_under = 70
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / ".coveragerc").write_text(
+        """[run]
+branch = false
+source = decoy
+omit = */cli.py
+
+[report]
+fail_under = 1
+partial_also = if debug:
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(AssertionError):
+        _assert_effective_coverage_configuration(_load_effective_coverage_configuration())
 
 
 def test_readme_local_document_links_exist() -> None:
