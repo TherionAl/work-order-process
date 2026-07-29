@@ -169,12 +169,35 @@ def test_sanitize_failure_message_replaces_embedded_json_payload() -> None:
     assert safe_message == "[payload redacted]"
 
 
-def test_sanitize_failure_message_keeps_ordinary_diagnostic_prose() -> None:
+@pytest.mark.parametrize(
+    "payload",
+    (
+        '{"token":"secret","padding":"' + "x" * 600 + '"}',
+        '["secret","' + "x" * 600 + '"]',
+    ),
+)
+def test_sanitize_failure_message_replaces_embedded_json_closing_after_limit(
+    payload: str,
+) -> None:
     safe_message = sanitize_failure_message(
-        ValueError("connection timeout after 3 seconds"),
+        ValueError("API returned " + payload),
     )
 
-    assert safe_message == "connection timeout after 3 seconds"
+    assert safe_message == "[payload redacted]"
+
+
+def test_sanitize_failure_message_keeps_ordinary_diagnostic_prose() -> None:
+    safe_message = sanitize_failure_message(
+        ValueError(
+            "connection timeout after 3 seconds; "
+            "missing field [customer_id]; template {name} is unavailable"
+        ),
+    )
+
+    assert safe_message == (
+        "connection timeout after 3 seconds; "
+        "missing field [customer_id]; template {name} is unavailable"
+    )
 
 
 def test_payload_inspection_bounds_decoder_attempts_to_persisted_prefix(
@@ -190,5 +213,5 @@ def test_payload_inspection_bounds_decoder_attempts_to_persisted_prefix(
 
     monkeypatch.setattr(import_failures.json, "JSONDecoder", CountingDecoder)
 
-    assert import_failures._is_payload("[" * 10_000) is False
+    assert import_failures._is_payload("[invalid]" * 10_000) is False
     assert calls <= 500

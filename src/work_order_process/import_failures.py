@@ -20,6 +20,14 @@ _SERIALIZED_PAYLOAD_PATTERN = re.compile(
     r"\b(?:payload|request|response|body|data)\s*[:=]\s*(?:\{|\[)",
     re.IGNORECASE,
 )
+_APPARENT_JSON_START_PATTERN = re.compile(
+    r"""
+    \{\s*(?:"|}|$)
+    |
+    \[\s*(?:["{\[\]}]|\d|-|[tfn]|$)
+    """,
+    re.VERBOSE,
+)
 _MAX_MESSAGE_LENGTH = 500
 _PAYLOAD_REDACTION = "[payload redacted]"
 
@@ -46,6 +54,8 @@ def _sanitize_text(message: str, *, secrets: Iterable[str]) -> str:
 def _is_payload(message: str) -> bool:
     inspection_text = message[:_MAX_MESSAGE_LENGTH]
     if _SERIALIZED_PAYLOAD_PATTERN.search(inspection_text):
+        return True
+    if _APPARENT_JSON_START_PATTERN.search(inspection_text):
         return True
     decoder = json.JSONDecoder()
     for index, character in enumerate(inspection_text):
