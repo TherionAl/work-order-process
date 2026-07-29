@@ -1,4 +1,6 @@
 from collections import deque
+from datetime import date, datetime
+import logging
 from pathlib import Path
 
 import pytest
@@ -94,6 +96,39 @@ def test_nonempty_invalid_amount_fails_with_source_row() -> None:
         convert_strict("annual_ops_fee", "bad amount", source_row=3)
 
 
+def test_valid_date_string_is_normalized() -> None:
+    """A supported date string has one stable database representation."""
+    assert convert_strict("service_expire_date", "2026/07/29", source_row=3) == "2026-07-29"
+
+
+def test_datetime_and_date_are_normalized() -> None:
+    """Excel date values retain their calendar date without a time component."""
+    assert convert_strict("ops_start_date", datetime(2026, 7, 29, 14, 30), source_row=3) == "2026-07-29"
+    assert convert_strict("ops_end_date", date(2026, 7, 30), source_row=3) == "2026-07-30"
+
+
+def test_invalid_date_fails_with_column_and_source_row() -> None:
+    """An impossible or unsupported nonblank date cannot be published unchanged."""
+    with pytest.raises(
+        CustomerAccountImportError,
+        match=r"service_expire_date.*source row 4",
+    ):
+        convert_strict("service_expire_date", "2026-02-30", source_row=4)
+
+
+def test_fractional_integer_fails_with_source_row() -> None:
+    """Integer columns must not silently truncate decimal values."""
+    with pytest.raises(CustomerAccountImportError, match=r"contract_count.*source row 5"):
+        convert_strict("contract_count", "1.5", source_row=5)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_numeric_values_fail_with_source_row(value: float) -> None:
+    """MySQL must never receive non-finite spreadsheet numbers."""
+    with pytest.raises(CustomerAccountImportError, match=r"annual_ops_fee.*source row 6"):
+        convert_strict("annual_ops_fee", value, source_row=6)
+
+
 def test_empty_customer_names_are_cleaned_not_failed() -> None:
     """Rows without either customer name are intentional business cleaning."""
     values = [None] * len(COLUMN_MAP)
@@ -181,3 +216,36 @@ def test_parse_failure_never_touches_formal_snapshot(monkeypatch) -> None:
     statements = [sql for sql, _ in connection.cursor_instance.executed]
     assert not any(sql.startswith("DELETE FROM customer_account") for sql in statements)
     assert connection.rollback_count == 1
+
+
+def test_database_failure_summary_hides_workbook_values(monkeypatch, caplog) -> None:
+    """Database diagnostics cannot leak raw workbook values through failure summaries."""
+    sensitive_cell = "arbitrary-sensitive-cell-token"
+
+    class FailingCursor(RecordingCursor):
+        def executemany(self, sql: str, rows: list[list[object]]) -> None:
+            raise RuntimeError(
+                f"duplicate value {sensitive_cell} user@example.com 13800138000"
+            )
+
+    connection = RecordingConnection(FailingCursor())
+    row = [None] * len(COLUMN_MAP)
+    row[1] = "Customer A"
+    workbook = RecordingWorkbook([tuple(header for header, _ in COLUMN_MAP), tuple(row)])
+    monkeypatch.setattr(customer_account_import, "load_workbook", lambda *args, **kwargs: workbook)
+    monkeypatch.setattr(customer_account_import, "_connect", lambda config: connection)
+    monkeypatch.setattr(customer_account_import, "ensure_auxiliary_schema", lambda config: None)
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(CustomerAccountImportError):
+            import_customer_account_xlsx(
+                _mysql_config(),
+                Path("customer-account.xlsx"),
+                "20260729",
+            )
+
+    failure_summary = "\n".join(record.getMessage() for record in caplog.records)
+    assert "customer account staging failed" in failure_summary
+    assert sensitive_cell not in failure_summary
+    assert "user@example.com" not in failure_summary
+    assert "13800138000" not in failure_summary

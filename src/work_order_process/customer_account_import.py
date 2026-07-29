@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+import math
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -18,6 +19,10 @@ logger = logging.getLogger(__name__)
 PARSE_FAILURE_STAGE = "customer_account_parse"
 STAGE_FAILURE_STAGE = "customer_account_stage"
 PUBLISH_FAILURE_STAGE = "customer_account_publish"
+STAGE_FAILURE_MESSAGES = {
+    STAGE_FAILURE_STAGE: "customer account staging failed",
+    PUBLISH_FAILURE_STAGE: "customer account publishing failed",
+}
 
 
 class CustomerAccountImportError(RuntimeError):
@@ -143,22 +148,45 @@ CONVERTERS = {
 }
 
 
+def _to_date_strict(value: object) -> str | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()
+    if not text:
+        return None
+    for date_format in ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(text, date_format).date().isoformat()
+        except ValueError:
+            continue
+    raise ValueError("unsupported date")
+
+
 def _to_decimal_strict(value: object) -> float | None:
     if value is None or value == "":
         return None
     text = str(value).replace(",", "").strip()
     if not text:
         return None
-    return float(text)
+    converted = float(text)
+    if not math.isfinite(converted):
+        raise ValueError("numeric value must be finite")
+    return converted
 
 
 def _to_int_strict(value: object) -> int | None:
     if value is None or value == "":
         return None
-    text = str(value).strip()
-    if not text:
+    converted = _to_decimal_strict(value)
+    if converted is None:
         return None
-    return int(float(text))
+    if not converted.is_integer():
+        raise ValueError("integer value must be mathematically integral")
+    return int(converted)
 
 
 STRICT_CONVERTERS = {
@@ -174,11 +202,11 @@ STRICT_CONVERTERS = {
         )
     },
     "contract_count": _to_int_strict,
-    "service_expire_date": _to_date,
-    "contract_apply_date": _to_date,
-    "ops_start_date": _to_date,
-    "ops_end_date": _to_date,
-    "acceptance_date": _to_date,
+    "service_expire_date": _to_date_strict,
+    "contract_apply_date": _to_date_strict,
+    "ops_start_date": _to_date_strict,
+    "ops_end_date": _to_date_strict,
+    "acceptance_date": _to_date_strict,
 }
 
 
@@ -338,15 +366,18 @@ def _import_customer_account_snapshot(
     except Exception as exc:
         if conn is not None:
             conn.rollback()
+        safe_exception = CustomerAccountImportError(
+            STAGE_FAILURE_MESSAGES.get(current_stage, "customer account import failed")
+        )
         logger.error(
             "customer account import failed: %s",
             failures.capture(
                 stage=current_stage,
-                exc=exc,
+                exc=safe_exception,
                 record_id="customer_account_snapshot",
             ).as_dict(),
         )
-        raise CustomerAccountImportError("customer account import failed") from exc
+        raise safe_exception from exc
     finally:
         if conn is not None:
             conn.close()
