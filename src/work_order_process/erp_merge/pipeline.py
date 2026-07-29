@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from datetime import date, datetime
 from pathlib import Path
-from typing import Iterable
 
 import pandas as pd
 from openpyxl import Workbook
@@ -26,7 +26,6 @@ from .mapping import (
     normalize_money_columns,
     normalize_text,
 )
-
 
 MAX_HEADER_SCAN_ROWS = 10
 NEW_REQUIRED_COLUMNS = ["合同编号", "销售组织", "签约客户", "标的行编码"]
@@ -77,9 +76,7 @@ def _drop_total_rows(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _read_source(file_path: Path, required_columns: Iterable[str]) -> pd.DataFrame:
-    raw = pd.read_excel(
-        file_path, header=None, dtype=str, keep_default_na=False
-    )
+    raw = pd.read_excel(file_path, header=None, dtype=str, keep_default_na=False)
     header_row = _find_header_row(raw, required_columns)
     columns = [_clean_header(value) for value in raw.iloc[header_row].tolist()]
     data = raw.iloc[header_row + 1 :].copy()
@@ -110,9 +107,7 @@ def _load_rules(rule_file: Path) -> tuple[list[str], pd.Series]:
     return output_columns, mapping
 
 
-def _remove_old_rows_existing_in_new(
-    old_df: pd.DataFrame, new_df: pd.DataFrame
-) -> pd.DataFrame:
+def _remove_old_rows_existing_in_new(old_df: pd.DataFrame, new_df: pd.DataFrame) -> pd.DataFrame:
     old_key = "合同分录ID"
     new_key = "企业版销售合同明细id"
     if old_key not in old_df.columns:
@@ -131,10 +126,7 @@ def _deduplicate_snapshot_lines(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     normalized_keys = pd.DataFrame(
-        {
-            column: normalize_text(df[column])
-            for column in SNAPSHOT_KEY_COLUMNS
-        },
+        {column: normalize_text(df[column]) for column in SNAPSHOT_KEY_COLUMNS},
         index=df.index,
     )
     complete_key = normalized_keys.ne("").all(axis=1)
@@ -165,9 +157,7 @@ def merge_erp_sources(
     old_df = _remove_old_rows_existing_in_new(old_df, new_df)
 
     new_aligned = align_new_data(new_df, output_columns)
-    old_converted = convert_old_to_new_columns(
-        old_df, output_columns, mapping, config
-    )
+    old_converted = convert_old_to_new_columns(old_df, output_columns, mapping, config)
     new_aligned[SOURCE_COLUMN] = "新ERP"
     old_converted[SOURCE_COLUMN] = "旧ERP"
     merged = pd.concat([new_aligned, old_converted], ignore_index=True)
@@ -195,9 +185,7 @@ def merge_erp_sources(
         for column in merged.columns
         if column not in (SOURCE_COLUMN, GENERATED_AT_COLUMN, SOURCE_DATE_COLUMN)
     ]
-    return merged[
-        middle + [SOURCE_COLUMN, GENERATED_AT_COLUMN, SOURCE_DATE_COLUMN]
-    ]
+    return merged[middle + [SOURCE_COLUMN, GENERATED_AT_COLUMN, SOURCE_DATE_COLUMN]]
 
 
 def build_standard_sheet(
@@ -207,9 +195,7 @@ def build_standard_sheet(
 ) -> pd.DataFrame:
     result = merged.copy()
     if "合同申请年份" not in result.columns and "合同申请日期" in result.columns:
-        apply_dates = pd.to_datetime(
-            normalize_text(result["合同申请日期"]), errors="coerce"
-        )
+        apply_dates = pd.to_datetime(normalize_text(result["合同申请日期"]), errors="coerce")
         result["合同申请年份"] = apply_dates.dt.year
 
     result = add_statistical_allocation_columns(
@@ -220,12 +206,8 @@ def build_standard_sheet(
         current_period[0],
         current_period[1],
     )
-    result["去年倒签调整后分摊服务费"] = result.pop(
-        "去年按期分摊服务费（去掉今年倒签的）"
-    )
-    result["今年倒签调整后分摊服务费"] = result.pop(
-        "今年按期分摊服务费（加上倒签去年的服务费）"
-    )
+    result["去年倒签调整后分摊服务费"] = result.pop("去年按期分摊服务费（去掉今年倒签的）")
+    result["今年倒签调整后分摊服务费"] = result.pop("今年按期分摊服务费（加上倒签去年的服务费）")
 
     headers = standard_headers()
     for column in headers:
@@ -240,7 +222,7 @@ def _excel_value(value: object) -> object:
     try:
         if pd.isna(value):
             return None
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         pass
     if isinstance(value, pd.Timestamp):
         return value.to_pydatetime()
@@ -280,9 +262,7 @@ def write_document_rows(
         document_row: list[object] = [DOCUMENT_CATEGORY_VALUE]
         for header, value in zip(headers, row, strict=True):
             cell_value = _document_data_value(header, value)
-            if header in DOCUMENT_DATE_FIELDS and isinstance(
-                cell_value, (datetime, date)
-            ):
+            if header in DOCUMENT_DATE_FIELDS and isinstance(cell_value, (datetime, date)):
                 cell = WriteOnlyCell(sheet, value=cell_value)
                 cell.number_format = "yyyy-mm-dd"
                 document_row.append(cell)
@@ -313,11 +293,7 @@ def _document_header_cell(sheet, value: str) -> WriteOnlyCell:
 
 
 def _document_data_value(header: str, value: object) -> object:
-    return (
-        _document_date_value(value)
-        if header in DOCUMENT_DATE_FIELDS
-        else _excel_value(value)
-    )
+    return _document_date_value(value) if header in DOCUMENT_DATE_FIELDS else _excel_value(value)
 
 
 def write_document_workbook(df: pd.DataFrame, output_file: Path) -> None:

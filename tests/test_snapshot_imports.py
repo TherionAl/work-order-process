@@ -1,17 +1,22 @@
 from pathlib import Path
 
-from work_order_process.erp_merge.config import load_config
 from work_order_process.customer_account_import import (
     COLUMN_MAP as CUSTOMER_ACCOUNT_COLUMN_MAP,
+)
+from work_order_process.customer_account_import import (
     convert as convert_customer_account,
 )
 from work_order_process.erp_import import (
     COLUMN_MAP as ERP_COLUMN_MAP,
+)
+from work_order_process.erp_import import (
     apply_baseline_sales_platform,
     apply_sales_platform_system_engineer,
+)
+from work_order_process.erp_import import (
     convert as convert_erp,
 )
-
+from work_order_process.erp_merge.config import load_config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 

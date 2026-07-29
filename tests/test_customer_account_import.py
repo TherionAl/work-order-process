@@ -1,6 +1,6 @@
+import logging
 from collections import deque
 from datetime import date, datetime
-import logging
 from pathlib import Path
 
 import pytest
@@ -24,7 +24,7 @@ class RecordingCursor:
         self.executemany_calls: list[tuple[str, list[list[object]]]] = []
         self._fetchone_values = deque(fetchone_values or [])
 
-    def __enter__(self) -> "RecordingCursor":
+    def __enter__(self) -> RecordingCursor:
         return self
 
     def __exit__(self, *args: object) -> None:
@@ -70,7 +70,7 @@ class RecordingWorkbook:
         self._rows = rows
         self.closed = False
 
-    def __getitem__(self, _: str) -> "RecordingWorkbook":
+    def __getitem__(self, _: str) -> RecordingWorkbook:
         return self
 
     def iter_rows(self, *, values_only: bool) -> list[tuple[object, ...]]:
@@ -106,7 +106,10 @@ def test_valid_date_string_is_normalized() -> None:
 
 def test_datetime_and_date_are_normalized() -> None:
     """Excel date values retain their calendar date without a time component."""
-    assert convert_strict("ops_start_date", datetime(2026, 7, 29, 14, 30), source_row=3) == "2026-07-29"
+    assert (
+        convert_strict("ops_start_date", datetime(2026, 7, 29, 14, 30), source_row=3)
+        == "2026-07-29"
+    )
     assert convert_strict("ops_end_date", date(2026, 7, 30), source_row=3) == "2026-07-30"
 
 
@@ -202,9 +205,7 @@ def test_parse_failure_never_touches_formal_snapshot(monkeypatch) -> None:
     row = [None] * len(COLUMN_MAP)
     row[1] = "Customer A"
     row[3] = "bad amount"
-    workbook = RecordingWorkbook(
-        [tuple(header for header, _ in COLUMN_MAP), tuple(row)]
-    )
+    workbook = RecordingWorkbook([tuple(header for header, _ in COLUMN_MAP), tuple(row)])
     monkeypatch.setattr(customer_account_import, "load_workbook", lambda *args, **kwargs: workbook)
     monkeypatch.setattr(customer_account_import, "_connect", lambda config: connection)
     monkeypatch.setattr(customer_account_import, "ensure_auxiliary_schema", lambda config: None)
@@ -227,9 +228,7 @@ def test_database_failure_summary_hides_workbook_values(monkeypatch, caplog) -> 
 
     class FailingCursor(RecordingCursor):
         def executemany(self, sql: str, rows: list[list[object]]) -> None:
-            raise RuntimeError(
-                f"duplicate value {sensitive_cell} user@example.com 13800138000"
-            )
+            raise RuntimeError(f"duplicate value {sensitive_cell} user@example.com 13800138000")
 
     connection = RecordingConnection(FailingCursor())
     row = [None] * len(COLUMN_MAP)

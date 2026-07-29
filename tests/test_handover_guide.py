@@ -6,7 +6,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GUIDE_PATH = PROJECT_ROOT / "docs" / "project_handover_guide.md"
 SOURCE_ROOT = PROJECT_ROOT / "src" / "work_order_process"
@@ -32,11 +31,7 @@ def _cli_commands() -> set[str]:
     )
     match = re.search(r"\{([^}]*\brun\b[^}]*)\}", result.stdout)
     assert match is not None
-    return {
-        command.strip()
-        for command in match.group(1).split(",")
-        if command.strip()
-    }
+    return {command.strip() for command in match.group(1).split(",") if command.strip()}
 
 
 def _source_symbols() -> set[str]:
@@ -76,17 +71,13 @@ def test_handover_guide_has_required_sections() -> None:
 
 def test_handover_guide_covers_every_cli_command() -> None:
     text = _guide_text()
-    missing = sorted(
-        command for command in _cli_commands() if f"`{command}`" not in text
-    )
+    missing = sorted(command for command in _cli_commands() if f"`{command}`" not in text)
     assert not missing, missing
 
 
 def test_handover_guide_indexes_all_source_symbols() -> None:
     text = _guide_text()
-    missing = sorted(
-        symbol for symbol in _source_symbols() if f"`{symbol}`" not in text
-    )
+    missing = sorted(symbol for symbol in _source_symbols() if f"`{symbol}`" not in text)
     assert not missing, missing
 
 
@@ -103,7 +94,5 @@ def test_handover_guide_local_links_exist() -> None:
         if not link.startswith(("http://", "https://", "#"))
     ]
     assert local_links
-    missing = sorted(
-        link for link in local_links if not (GUIDE_PATH.parent / link).exists()
-    )
+    missing = sorted(link for link in local_links if not (GUIDE_PATH.parent / link).exists())
     assert not missing, missing

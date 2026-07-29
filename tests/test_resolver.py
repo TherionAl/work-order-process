@@ -5,19 +5,19 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from work_order_process.resolver import (
+    CREATER_TYPE,
+    PRIORITY_LEVEL,
     TICKET_STATUS,
     TICKET_TYPE,
-    PRIORITY_LEVEL,
     YES_NO,
-    CREATER_TYPE,
     TicketFieldResolver,
+    _first_nonempty,
     _replace_enum,
     _replace_unix_timestamp,
     _split_id_list,
-    _first_nonempty,
     resolve_ticket_detail_values,
 )
 
@@ -144,8 +144,8 @@ def test_resolve_ticket_detail_values_adds_contact_name() -> None:
 
     result = resolve_ticket_detail_values(detail, client, field_resolver)
 
-    assert result["custUserId"] == "100"              # 原 ID 保留
-    assert result["cust_user_name"] == "张三"          # 新增姓名
+    assert result["custUserId"] == "100"  # 原 ID 保留
+    assert result["cust_user_name"] == "张三"  # 新增姓名
 
 
 def test_resolve_ticket_detail_values_adds_support_names() -> None:

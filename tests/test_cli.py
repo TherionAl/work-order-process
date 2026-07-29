@@ -6,10 +6,9 @@ import pytest
 
 from work_order_process import cli
 from work_order_process.api import ApiError
-from work_order_process.config import ConfigError
 from work_order_process.cli import build_parser, dispatch_command
 from work_order_process.cli_commands import database, diagnostics, exports, imports
-
+from work_order_process.config import ConfigError
 
 EXPECTED_COMMANDS = frozenset(
     {
@@ -77,9 +76,7 @@ def _assert_command_contract(
 
     assert parser_commands == EXPECTED_COMMANDS
     assert handler_commands == EXPECTED_COMMANDS
-    assert sum(len(command_set) for command_set in command_sets) == len(
-        handler_commands
-    )
+    assert sum(len(command_set) for command_set in command_sets) == len(handler_commands)
 
 
 def test_command_contract_rejects_a_missing_base_command() -> None:
@@ -97,16 +94,14 @@ def test_command_contract_rejects_a_missing_base_command() -> None:
 
 def test_parser_commands_match_exactly_one_handler() -> None:
     parser = build_parser()
-    command_action = next(
-        action for action in parser._actions if action.dest == "command"
-    )
+    command_action = next(action for action in parser._actions if action.dest == "command")
     _assert_command_contract(
         set(command_action.choices),
         (
-        database.COMMANDS,
-        imports.COMMANDS,
-        exports.COMMANDS,
-        diagnostics.COMMANDS,
+            database.COMMANDS,
+            imports.COMMANDS,
+            exports.COMMANDS,
+            diagnostics.COMMANDS,
         ),
     )
 
@@ -126,7 +121,9 @@ def test_dispatch_stops_after_the_first_handler_that_accepts(monkeypatch) -> Non
     assert calls == ["database", "imports"]
 
 
-def test_dispatch_calls_handlers_in_order_then_rejects_unhandled_parser_command(monkeypatch) -> None:
+def test_dispatch_calls_handlers_in_order_then_rejects_unhandled_parser_command(
+    monkeypatch,
+) -> None:
     parser = build_parser()
     args = parser.parse_args(["run"])
     calls: list[str] = []
@@ -216,7 +213,9 @@ def test_main_does_not_translate_local_handler_api_error(monkeypatch) -> None:
     monkeypatch.setattr(cli, "load_settings", lambda: settings)
     monkeypatch.setattr(cli, "assert_schema_current", lambda _: None)
     monkeypatch.setattr(cli.DataDictionary, "from_pdf", lambda _: object())
-    monkeypatch.setattr(imports, "import_erp_xlsx", lambda *_: (_ for _ in ()).throw(ApiError("local")))
+    monkeypatch.setattr(
+        imports, "import_erp_xlsx", lambda *_: (_ for _ in ()).throw(ApiError("local"))
+    )
     monkeypatch.setattr("sys.argv", ["work_order_process", "import-erp", "--erp-file", "data.xlsx"])
 
     with pytest.raises(ApiError, match="local"):
@@ -230,7 +229,7 @@ def test_main_translates_api_error_from_client_path(monkeypatch) -> None:
         def __init__(self, _: object) -> None:
             pass
 
-        def __enter__(self) -> "FakeClient":
+        def __enter__(self) -> FakeClient:
             return self
 
         def __exit__(self, *_: object) -> None:

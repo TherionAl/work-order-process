@@ -26,7 +26,7 @@ def test_read_sync_logs_returns_latest_rows_from_fake_database(
     executed: list[tuple[str, object]] = []
 
     class Cursor:
-        def __enter__(self) -> "Cursor":
+        def __enter__(self) -> Cursor:
             return self
 
         def __exit__(self, *args: object) -> None:
@@ -39,7 +39,7 @@ def test_read_sync_logs_returns_latest_rows_from_fake_database(
             return [{"id": 2, "status": "success"}]
 
     class Connection:
-        def __enter__(self) -> "Connection":
+        def __enter__(self) -> Connection:
             return self
 
         def __exit__(self, *args: object) -> None:

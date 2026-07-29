@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 VERSION = 2
 NAME = "erp_allocation_columns"
 
@@ -39,11 +38,7 @@ def missing_columns(cursor: Any, database: str) -> list[str]:
         (database, "erp_data"),
     )
     existing = {str(row[0]) for row in cursor.fetchall()}
-    return [
-        column
-        for column in ERP_ALLOCATION_COLUMNS
-        if column not in existing
-    ]
+    return [column for column in ERP_ALLOCATION_COLUMNS if column not in existing]
 
 
 def is_satisfied(cursor: Any, database: str) -> bool:
@@ -52,7 +47,4 @@ def is_satisfied(cursor: Any, database: str) -> bool:
 
 def apply(cursor: Any, database: str) -> None:
     for column in missing_columns(cursor, database):
-        cursor.execute(
-            f"ALTER TABLE erp_data ADD COLUMN {column} "
-            f"{ERP_ALLOCATION_COLUMNS[column]}"
-        )
+        cursor.execute(f"ALTER TABLE erp_data ADD COLUMN {column} {ERP_ALLOCATION_COLUMNS[column]}")

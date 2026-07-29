@@ -5,10 +5,10 @@ import pytest
 
 from work_order_process.erp_merge.config import load_config
 from work_order_process.erp_merge.mapping import (
-    normalize_platform,
     add_engineer_column,
-    parse_number_series,
     build_old_shared_amount,
+    normalize_platform,
+    parse_number_series,
 )
 
 
@@ -25,9 +25,7 @@ def test_normalize_platform(config):
 
 
 def test_add_engineer_column(config):
-    df = pd.DataFrame(
-        {"营销平台": ["博思智合", "深圳分公司", "吉林分公司", "未知分公司"]}
-    )
+    df = pd.DataFrame({"营销平台": ["博思智合", "深圳分公司", "吉林分公司", "未知分公司"]})
     result = add_engineer_column(df, config)
     assert result.loc[0, "体系工程师"] == "黄迪"
     assert result.loc[1, "体系工程师"] == "梁通"
@@ -52,10 +50,12 @@ def test_parse_number_series_rejects_nonempty_invalid_value():
 
 
 def test_build_old_shared_amount(config):
-    old_df = pd.DataFrame({
-        "累计收入金额-去年同期": ["1000", "1,000"],
-        "分成比例": ["0.25", "25%"],
-    })
+    old_df = pd.DataFrame(
+        {
+            "累计收入金额-去年同期": ["1000", "1,000"],
+            "分成比例": ["0.25", "25%"],
+        }
+    )
     result = build_old_shared_amount(old_df, "累计收入金额-去年同期", config)
     expected = pd.Series([250.0, 250.0])
     pd.testing.assert_series_equal(result, expected)

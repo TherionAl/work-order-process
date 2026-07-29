@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
 
-from .config import MySQLConfig, PROJECT_ROOT
+from .config import PROJECT_ROOT, MySQLConfig
 
 
 class RevenueSnapshotError(ValueError):
@@ -180,9 +181,13 @@ def build_revenue_rows(
     for platform, target in targets.items():
         platform_metrics = metrics.get(platform, {})
         recognized_revenue = _amount(platform_metrics.get("recognized_revenue"))
-        prior_year_recognized_revenue = _amount(platform_metrics.get("prior_year_recognized_revenue"))
+        prior_year_recognized_revenue = _amount(
+            platform_metrics.get("prior_year_recognized_revenue")
+        )
         contracts_on_hand_amount = _amount(platform_metrics.get("contracts_on_hand_amount"))
-        prior_year_contracts_on_hand_amount = _amount(platform_metrics.get("prior_year_contracts_on_hand_amount"))
+        prior_year_contracts_on_hand_amount = _amount(
+            platform_metrics.get("prior_year_contracts_on_hand_amount")
+        )
         signing_completed_amount = _amount(platform_metrics.get("signing_completed_amount"))
         prior_year_signing_amount = _amount(platform_metrics.get("prior_year_signing_amount"))
         recognized_revenue_excluding_estimate = _amount(
@@ -217,13 +222,17 @@ def build_revenue_rows(
                 "signing_completed_amount": signing_completed_amount,
                 "prior_year_signing_amount": prior_year_signing_amount,
                 "signing_yoy_amount": _amount(signing_completed_amount - prior_year_signing_amount),
-                "signing_yoy_rate": _growth_rate(signing_completed_amount, prior_year_signing_amount),
+                "signing_yoy_rate": _growth_rate(
+                    signing_completed_amount, prior_year_signing_amount
+                ),
             }
         )
     return rows
 
 
-def export_revenue_workbook(path: Path, rows: list[Mapping[str, Decimal | int | str | None]]) -> None:
+def export_revenue_workbook(
+    path: Path, rows: list[Mapping[str, Decimal | int | str | None]]
+) -> None:
     """Export the monthly result in the supplied template's bilingual-header layout."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -243,7 +252,9 @@ def export_revenue_workbook(path: Path, rows: list[Mapping[str, Decimal | int | 
         for column_index, column_name in enumerate(ENGLISH_HEADERS, start=2):
             worksheet.cell(row_index, column_index, row.get(column_name))
 
-    for row in worksheet.iter_rows(min_row=1, max_row=2, min_col=2, max_col=len(ENGLISH_HEADERS) + 1):
+    for row in worksheet.iter_rows(
+        min_row=1, max_row=2, min_col=2, max_col=len(ENGLISH_HEADERS) + 1
+    ):
         for cell in row:
             cell.font = Font(bold=True)
     for column in range(2, len(ENGLISH_HEADERS) + 2):
@@ -251,9 +262,9 @@ def export_revenue_workbook(path: Path, rows: list[Mapping[str, Decimal | int | 
     for row in range(3, len(rows) + 4):
         for column_index, column_name in enumerate(ENGLISH_HEADERS, start=2):
             if column_name in AMOUNT_COLUMNS:
-                worksheet.cell(row, column_index).number_format = '#,##0'
+                worksheet.cell(row, column_index).number_format = "#,##0"
             elif column_name in RATE_COLUMNS:
-                worksheet.cell(row, column_index).number_format = '0.00%'
+                worksheet.cell(row, column_index).number_format = "0.00%"
 
     workbook.save(path)
     workbook.close()
@@ -264,8 +275,12 @@ def ensure_revenue_summary_schema(config: MySQLConfig) -> None:
 
     import pymysql
 
-    table_statement = (PROJECT_ROOT / "sql" / "ops_service_revenue_monthly.sql").read_text(encoding="utf-8")
-    view_statement = (PROJECT_ROOT / "sql" / "v_ops_service_revenue_monthly_with_total.sql").read_text(encoding="utf-8")
+    table_statement = (PROJECT_ROOT / "sql" / "ops_service_revenue_monthly.sql").read_text(
+        encoding="utf-8"
+    )
+    view_statement = (
+        PROJECT_ROOT / "sql" / "v_ops_service_revenue_monthly_with_total.sql"
+    ).read_text(encoding="utf-8")
     with pymysql.connect(
         host=config.host,
         port=config.port,
@@ -290,7 +305,9 @@ def ensure_revenue_summary_schema(config: MySQLConfig) -> None:
             if money_columns_to_migrate:
                 cursor.execute(
                     "UPDATE ops_service_revenue_monthly SET "
-                    + ", ".join(f"{column} = ROUND({column}, 0)" for column in money_columns_to_migrate)
+                    + ", ".join(
+                        f"{column} = ROUND({column}, 0)" for column in money_columns_to_migrate
+                    )
                 )
                 cursor.execute(
                     "ALTER TABLE ops_service_revenue_monthly "
@@ -346,8 +363,7 @@ def fetch_revenue_metrics(
     for row in cursor.fetchall():
         platform = str(row[0]).strip()
         metrics[platform] = {
-            field: _decimal_value(value)
-            for field, value in zip(fields, row[1:], strict=True)
+            field: _decimal_value(value) for field, value in zip(fields, row[1:], strict=True)
         }
     return metrics
 
@@ -386,9 +402,7 @@ def require_revenue_metrics(
 ) -> None:
     """Prevent an empty metric query from becoming an all-zero report."""
     if not metrics:
-        raise RevenueSnapshotError(
-            f"ERP 快照 {create_date} 没有符合条件的有效营收指标。"
-        )
+        raise RevenueSnapshotError(f"ERP 快照 {create_date} 没有符合条件的有效营收指标。")
 
 
 def save_revenue_rows(cursor: Any, rows: list[Mapping[str, Decimal | int | str | None]]) -> None:
@@ -407,21 +421,18 @@ def replace_revenue_rows(
 ) -> None:
     """Replace the complete platform set for one statistics month."""
     cursor.execute(
-        "DELETE FROM ops_service_revenue_monthly "
-        "WHERE stat_year = %s AND stat_month = %s",
+        "DELETE FROM ops_service_revenue_monthly WHERE stat_year = %s AND stat_month = %s",
         (year, month),
     )
     save_revenue_rows(cursor, rows)
     cursor.execute(
-        "SELECT COUNT(*) FROM ops_service_revenue_monthly "
-        "WHERE stat_year = %s AND stat_month = %s",
+        "SELECT COUNT(*) FROM ops_service_revenue_monthly WHERE stat_year = %s AND stat_month = %s",
         (year, month),
     )
     published_rows = int(cursor.fetchone()[0])
     if published_rows != len(rows):
         raise RevenueSnapshotError(
-            f"营收汇总写入行数不一致: expected={len(rows)}, "
-            f"published={published_rows}"
+            f"营收汇总写入行数不一致: expected={len(rows)}, published={published_rows}"
         )
 
 
@@ -487,7 +498,9 @@ def generate_revenue_summary(
         if persist:
             connection.commit()
 
-    export_path = output_path or output_dir / "revenue_summary" / f"运维服务营收数据表_{year}{month:02d}.xlsx"
+    export_path = (
+        output_path or output_dir / "revenue_summary" / f"运维服务营收数据表_{year}{month:02d}.xlsx"
+    )
     export_revenue_workbook(export_path, rows)
     return {
         "stat_year": year,
@@ -505,7 +518,9 @@ def generate_revenue_summary(
 def _find_target_header(worksheet) -> tuple[int, dict[str, int]]:
     required = ("年", "月", "营销平台", "收入目标值")
     for row_index, values in enumerate(worksheet.iter_rows(values_only=True), start=1):
-        indexes = {str(value).strip(): index for index, value in enumerate(values) if value is not None}
+        indexes = {
+            str(value).strip(): index for index, value in enumerate(values) if value is not None
+        }
         if all(name in indexes for name in required):
             return row_index, indexes
     raise ValueError("目标文件缺少 年、月、营销平台、收入目标值 列。")
@@ -518,10 +533,10 @@ def _write_total_formulas(worksheet, row_count: int) -> None:
         letter = worksheet.cell(1, column).column_letter
         worksheet.cell(3, column, f"=SUM({letter}4:{letter}{end_row})")
 
-    worksheet.cell(3, 7, "=IFERROR(F3/E3,\"\")")
-    worksheet.cell(3, 11, "=IFERROR(H3/I3-1,\"\")")
-    worksheet.cell(3, 15, "=IFERROR(L3/M3-1,\"\")")
-    worksheet.cell(3, 19, "=IFERROR(P3/Q3-1,\"\")")
+    worksheet.cell(3, 7, '=IFERROR(F3/E3,"")')
+    worksheet.cell(3, 11, '=IFERROR(H3/I3-1,"")')
+    worksheet.cell(3, 15, '=IFERROR(L3/M3-1,"")')
+    worksheet.cell(3, 19, '=IFERROR(P3/Q3-1,"")')
 
 
 def _text_at(values: tuple[object, ...], index: int) -> str | None:
@@ -541,7 +556,7 @@ def _decimal_at(values: tuple[object, ...], index: int) -> Decimal | None:
         return None
     try:
         return Decimal(str(values[index]).replace(",", "").strip())
-    except (InvalidOperation, ValueError):
+    except InvalidOperation, ValueError:
         return None
 
 
@@ -550,7 +565,7 @@ def _amount(value: Decimal | int | str | None) -> Decimal:
         return Decimal("0.00")
     try:
         return Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-    except (InvalidOperation, ValueError):
+    except InvalidOperation, ValueError:
         return Decimal("0.00")
 
 

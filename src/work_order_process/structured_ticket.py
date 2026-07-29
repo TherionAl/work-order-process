@@ -16,7 +16,6 @@ from typing import Any
 
 from .dictionary import DataDictionary
 
-
 MAIN_FIELD_COLUMN_MAP = {
     "ticketId": "ticket_id",
     "custUserId": "cust_user_id",
@@ -92,15 +91,31 @@ def build_ticket_detail_custom_field_rows(
     """把 `custom_fields` 转换为 MySQL 自定义字段明细行。"""
 
     ticket_id = int(str(raw_detail.get("ticketId") or value_detail.get("ticketId")))
-    template_id = text_or_none(value_detail.get("ticketTemplateId") or raw_detail.get("ticketTemplateId"))
-    raw_fields = raw_detail.get("custom_fields") if isinstance(raw_detail.get("custom_fields"), list) else []
-    value_fields = value_detail.get("custom_fields") if isinstance(value_detail.get("custom_fields"), list) else []
+    template_id = text_or_none(
+        value_detail.get("ticketTemplateId") or raw_detail.get("ticketTemplateId")
+    )
+    raw_fields = (
+        raw_detail.get("custom_fields") if isinstance(raw_detail.get("custom_fields"), list) else []
+    )
+    value_fields = (
+        value_detail.get("custom_fields")
+        if isinstance(value_detail.get("custom_fields"), list)
+        else []
+    )
 
     rows: list[dict[str, Any]] = []
     max_len = max(len(raw_fields), len(value_fields))
     for index in range(max_len):
-        raw_item = raw_fields[index] if index < len(raw_fields) and isinstance(raw_fields[index], dict) else {}
-        value_item = value_fields[index] if index < len(value_fields) and isinstance(value_fields[index], dict) else {}
+        raw_item = (
+            raw_fields[index]
+            if index < len(raw_fields) and isinstance(raw_fields[index], dict)
+            else {}
+        )
+        value_item = (
+            value_fields[index]
+            if index < len(value_fields) and isinstance(value_fields[index], dict)
+            else {}
+        )
         field_value = value_item.get("value", raw_item.get("value"))
         rows.append(
             {
@@ -110,7 +125,9 @@ def build_ticket_detail_custom_field_rows(
                 "field_key": text_or_none(raw_item.get("key")) or "",
                 "field_name": text_or_none(value_item.get("key") or raw_item.get("key")),
                 "field_value": text_or_none(field_value),
-                "field_value_json": json_or_none(field_value) if isinstance(field_value, (dict, list)) else None,
+                "field_value_json": json_or_none(field_value)
+                if isinstance(field_value, (dict, list))
+                else None,
                 "field_value_type": value_type(field_value),
             }
         )
@@ -130,23 +147,49 @@ def build_main_excel_rows(
         if key == "custom_fields":
             continue
         value = value_detail.get(key, raw_detail.get(key))
-        rows.append([ticket_id, key, dictionary.label("tickets", str(key)), stringify_value(value), value_type(value)])
+        rows.append(
+            [
+                ticket_id,
+                key,
+                dictionary.label("tickets", str(key)),
+                stringify_value(value),
+                value_type(value),
+            ]
+        )
     return rows
 
 
-def build_custom_field_excel_rows(raw_detail: dict[str, Any], value_detail: dict[str, Any]) -> list[list[Any]]:
+def build_custom_field_excel_rows(
+    raw_detail: dict[str, Any], value_detail: dict[str, Any]
+) -> list[list[Any]]:
     """把 `custom_fields` 动态字段整理成 Excel 明细 sheet 行。"""
 
     ticket_id = raw_detail.get("ticketId") or value_detail.get("ticketId") or ""
     template_id = value_detail.get("ticketTemplateId") or raw_detail.get("ticketTemplateId") or ""
-    raw_fields = raw_detail.get("custom_fields") if isinstance(raw_detail.get("custom_fields"), list) else []
-    value_fields = value_detail.get("custom_fields") if isinstance(value_detail.get("custom_fields"), list) else []
+    raw_fields = (
+        raw_detail.get("custom_fields") if isinstance(raw_detail.get("custom_fields"), list) else []
+    )
+    value_fields = (
+        value_detail.get("custom_fields")
+        if isinstance(value_detail.get("custom_fields"), list)
+        else []
+    )
 
-    rows: list[list[Any]] = [["工单ID", "工单模板", "字段顺序", "英文字段", "中文字段", "值", "值类型"]]
+    rows: list[list[Any]] = [
+        ["工单ID", "工单模板", "字段顺序", "英文字段", "中文字段", "值", "值类型"]
+    ]
     max_len = max(len(raw_fields), len(value_fields))
     for index in range(max_len):
-        raw_item = raw_fields[index] if index < len(raw_fields) and isinstance(raw_fields[index], dict) else {}
-        value_item = value_fields[index] if index < len(value_fields) and isinstance(value_fields[index], dict) else {}
+        raw_item = (
+            raw_fields[index]
+            if index < len(raw_fields) and isinstance(raw_fields[index], dict)
+            else {}
+        )
+        value_item = (
+            value_fields[index]
+            if index < len(value_fields) and isinstance(value_fields[index], dict)
+            else {}
+        )
         field_value = value_item.get("value", raw_item.get("value"))
         rows.append(
             [

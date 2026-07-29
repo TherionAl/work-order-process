@@ -4,7 +4,6 @@ import re
 
 import pandas as pd
 
-
 MONEY_KEYWORDS = ("金额", "价税", "单价", "回款", "开票", "确收", "应分摊")
 MONEY_PATTERN = re.compile("|".join(MONEY_KEYWORDS))
 DATE_FIELDS = [
@@ -58,18 +57,13 @@ def parse_number_series(
         .str.replace("，", "", regex=False)
         .str.rstrip("%")
     )
-    numbers = pd.to_numeric(
-        numeric_text.replace({"/": pd.NA, "": pd.NA}), errors="coerce"
-    )
+    numbers = pd.to_numeric(numeric_text.replace({"/": pd.NA, "": pd.NA}), errors="coerce")
     invalid = text_values.ne("") & text_values.ne("/") & numbers.isna()
     if invalid.any():
-        position = next(
-            index for index, is_invalid in enumerate(invalid.tolist()) if is_invalid
-        )
+        position = next(index for index, is_invalid in enumerate(invalid.tolist()) if is_invalid)
         source_value = text_values.iloc[position]
         raise InvalidNumericValue(
-            f"{field_name or '数值字段'}第 {position + row_offset} 行无法解析: "
-            f"{source_value!r}"
+            f"{field_name or '数值字段'}第 {position + row_offset} 行无法解析: {source_value!r}"
         )
     numbers = numbers.fillna(0.0).astype("float64")
     percent_mask = text_values.str.endswith("%")
@@ -92,20 +86,12 @@ def build_old_shared_amount(old_df: pd.DataFrame, source_column: str, config: di
 
 
 def build_contract_type(old_df: pd.DataFrame) -> pd.Series:
-    standard_type = normalize_text(
-        old_df.get("是否标准合同", pd.Series("", index=old_df.index))
-    )
-    return standard_type.where(
-        standard_type == "统签散开合同", "普通销售合同"
-    )
+    standard_type = normalize_text(old_df.get("是否标准合同", pd.Series("", index=old_df.index)))
+    return standard_type.where(standard_type == "统签散开合同", "普通销售合同")
 
 
-def build_yes_no_by_standard_type(
-    old_df: pd.DataFrame, expected_value: str
-) -> pd.Series:
-    standard_type = normalize_text(
-        old_df.get("是否标准合同", pd.Series("", index=old_df.index))
-    )
+def build_yes_no_by_standard_type(old_df: pd.DataFrame, expected_value: str) -> pd.Series:
+    standard_type = normalize_text(old_df.get("是否标准合同", pd.Series("", index=old_df.index)))
     return pd.Series(
         ["是" if value == expected_value else "否" for value in standard_type],
         index=old_df.index,
@@ -113,9 +99,7 @@ def build_yes_no_by_standard_type(
 
 
 def build_business_type(old_df: pd.DataFrame) -> pd.Series:
-    source = normalize_text(
-        old_df.get("核算收入类型分组", pd.Series("", index=old_df.index))
-    )
+    source = normalize_text(old_df.get("核算收入类型分组", pd.Series("", index=old_df.index)))
     type_mapping = {
         "运维服务": "运维服务费",
         "实施服务": "实施服务费",
@@ -128,12 +112,8 @@ def build_business_type(old_df: pd.DataFrame) -> pd.Series:
 
 
 def build_contract_category(old_df: pd.DataFrame) -> pd.Series:
-    contract_type = normalize_text(
-        old_df.get("合同类型", pd.Series("", index=old_df.index))
-    )
-    return contract_type.map(
-        {"运维合同": "运维合同", "实施合同": "非运维合同"}
-    ).fillna("/")
+    contract_type = normalize_text(old_df.get("合同类型", pd.Series("", index=old_df.index)))
+    return contract_type.map({"运维合同": "运维合同", "实施合同": "非运维合同"}).fillna("/")
 
 
 def convert_old_to_new_columns(
@@ -158,13 +138,9 @@ def convert_old_to_new_columns(
         elif target_column == "合同类型" and "统签散开合同" in rule:
             converted[target_column] = build_contract_type(old_df)
         elif target_column == "暂估运维运营" and "运维收入暂估合同" in rule:
-            converted[target_column] = build_yes_no_by_standard_type(
-                old_df, "运维收入暂估合同"
-            )
+            converted[target_column] = build_yes_no_by_standard_type(old_df, "运维收入暂估合同")
         elif target_column == "虚拟合同" and "虚拟销售合同" in rule:
-            converted[target_column] = build_yes_no_by_standard_type(
-                old_df, "虚拟销售合同"
-            )
+            converted[target_column] = build_yes_no_by_standard_type(old_df, "虚拟销售合同")
         elif target_column == "业务类型" and "核算收入类型分组" in rule:
             converted[target_column] = build_business_type(old_df)
         elif target_column == "合同分类" and "合同类型" in rule:

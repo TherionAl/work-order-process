@@ -5,9 +5,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_CONFIG_PATH = (
-    Path(__file__).resolve().parent.parent.parent.parent
-    / "config"
-    / "erp_merge_rules.toml"
+    Path(__file__).resolve().parent.parent.parent.parent / "config" / "erp_merge_rules.toml"
 )
 REQUIRED_SECTIONS = ["营销平台映射", "体系工程师", "金额换算"]
 

@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Mapping, Sequence
-
+from typing import Any
 
 CUSTOMER_COLUMNS = [
     "customer_id",
@@ -61,16 +61,26 @@ def build_customer_row(record: dict[str, Any], source_flag: str) -> dict[str, An
         "customer_name": text_or_none(
             first_value(record, "companyName", "customerName", "company_name", "name", "userName")
         ),
-        "customer_type": text_or_none(first_value(record, "customerType", "customer_type", "rank", "type", "nature")),
-        "province": text_or_none(first_value(record, "province", "provinceName", "area", "areaName")),
+        "customer_type": text_or_none(
+            first_value(record, "customerType", "customer_type", "rank", "type", "nature")
+        ),
+        "province": text_or_none(
+            first_value(record, "province", "provinceName", "area", "areaName")
+        ),
         "city": text_or_none(first_value(record, "city", "cityName", "area2", "area2Name")),
-        "district": text_or_none(first_value(record, "district", "districtName", "area3", "area3Name")),
+        "district": text_or_none(
+            first_value(record, "district", "districtName", "area3", "area3Name")
+        ),
         "address": text_or_none(first_value(record, "address", "addr")),
-        "contact_name": text_or_none(first_value(record, "contactor", "contactName", "contact_name", "linkman")),
+        "contact_name": text_or_none(
+            first_value(record, "contactor", "contactName", "contact_name", "linkman")
+        ),
         "phone": text_or_none(first_value(record, "mobile", "phone", "tel", "telephone")),
         "email": text_or_none(first_value(record, "email", "mail")),
         "source_flags": source_flag,
-        "source_updated_at": parse_datetime(first_value(record, "updateTime", "updateDT", "updated_at", "modifyTime")),
+        "source_updated_at": parse_datetime(
+            first_value(record, "updateTime", "updateDT", "updated_at", "modifyTime")
+        ),
     }
 
 
@@ -82,18 +92,28 @@ def build_contact_row(record: dict[str, Any], source_flag: str) -> dict[str, Any
             first_value(record, "cId", "cid", "id", "contactId", "contacterId"),
             "contact_id",
         ),
-        "contact_name": text_or_none(first_value(record, "realName", "name", "contactName", "contact_name")),
+        "contact_name": text_or_none(
+            first_value(record, "realName", "name", "contactName", "contact_name")
+        ),
         "phone": text_or_none(first_value(record, "mobile", "phoneNumber", "mobilePhone")),
         "fixed_phone": text_or_none(first_value(record, "fixnumber", "fixedPhone", "tel", "phone")),
         "email": text_or_none(first_value(record, "email", "mail")),
         "qq": text_or_none(first_value(record, "QQ", "qq")),
         "wechat": text_or_none(first_value(record, "wechat", "weChat", "wx")),
-        "customer_id": text_or_none(first_value(record, "companyId", "userId", "uId", "customerId")),
-        "customer_name": text_or_none(first_value(record, "companyName", "customerName", "customer_name")),
-        "department_name": text_or_none(first_value(record, "department", "departmentName", "deptName")),
+        "customer_id": text_or_none(
+            first_value(record, "companyId", "userId", "uId", "customerId")
+        ),
+        "customer_name": text_or_none(
+            first_value(record, "companyName", "customerName", "customer_name")
+        ),
+        "department_name": text_or_none(
+            first_value(record, "department", "departmentName", "deptName")
+        ),
         "position_name": text_or_none(first_value(record, "position", "positionName", "jobTitle")),
         "source_flags": source_flag,
-        "source_updated_at": parse_datetime(first_value(record, "updateTime", "updateDT", "updated_at", "modifyTime")),
+        "source_updated_at": parse_datetime(
+            first_value(record, "updateTime", "updateDT", "updated_at", "modifyTime")
+        ),
     }
 
 
@@ -101,7 +121,9 @@ def entity_row_hash(row: Mapping[str, Any], fields: Sequence[str]) -> str:
     """Return a stable business-field hash for change detection."""
 
     payload = {field: row.get(field) for field in fields}
-    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+    )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -150,7 +172,7 @@ def parse_datetime(value: Any) -> datetime | None:
         return datetime.fromtimestamp(int(text[:10]))
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
         try:
-            return datetime.strptime(text[:19 if "%S" in fmt else 10], fmt)
+            return datetime.strptime(text[: 19 if "%S" in fmt else 10], fmt)
         except ValueError:
             continue
     return None

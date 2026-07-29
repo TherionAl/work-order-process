@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pymysql
 
-from .config import MySQLConfig, PROJECT_ROOT
+from .config import PROJECT_ROOT, MySQLConfig
 
 
 def ensure_auxiliary_schema(config: MySQLConfig) -> None:

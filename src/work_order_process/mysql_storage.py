@@ -19,17 +19,16 @@ from __future__ import annotations
 
 import json
 import re
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .api import ApiError, WorkOrderClient
 from .config import MySQLConfig
 from .dictionary import DataDictionary
-from .import_failures import FailureCollector, ImportFailure
-from .resolver import TicketFieldResolver, _split_id_list, resolve_ticket_detail_values
+from .import_failures import FailureCollector
+from .resolver import TicketFieldResolver, resolve_ticket_detail_values
 from .sync_log import SYNC_TASK_LOG_DDL, write_sync_log
 
 API_FAILURE_STAGE = "api"
@@ -497,8 +496,6 @@ SELECT
 """
 
 
-
-
 def ensure_mysql_schema(config: MySQLConfig) -> None:
     """创建数据库和 5 张表（含 2 张分区表）。"""
 
@@ -558,7 +555,9 @@ def create_customer_contact_analysis_views(config: MySQLConfig) -> None:
             cursor.execute(CUSTOMER_DATA_QUALITY_VIEW_SQL)
 
 
-def _add_missing_columns(cursor: Any, database: str, table_name: str, statements: Iterable[str]) -> None:
+def _add_missing_columns(
+    cursor: Any, database: str, table_name: str, statements: Iterable[str]
+) -> None:
     cursor.execute(
         "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s",
         (database, table_name),
@@ -614,6 +613,7 @@ def drop_mysql_tables(config: MySQLConfig) -> None:
 # ---------------------------------------------------------------------------
 # 分区管理
 # ---------------------------------------------------------------------------
+
 
 def get_existing_partitions(config: MySQLConfig) -> set[str]:
     """返回工单主表中当前已存在的分区名称集合。"""
@@ -703,6 +703,7 @@ def generate_months_ahead(months_count: int) -> list[tuple[int, int]]:
 # Compatibility facades for ticket import
 # ---------------------------------------------------------------------------
 
+
 def import_ticket_detail_to_mysql(
     config: MySQLConfig,
     dictionary: DataDictionary,
@@ -715,7 +716,9 @@ def import_ticket_detail_to_mysql(
     raw_detail = client.fetch_ticket_detail(ticket_id)
     if not raw_detail:
         raise ApiError(f"Ticket detail not found: {ticket_id}")
-    field_resolver = TicketFieldResolver(client.fetch_ticket_fields(), client.fetch_company_fields())
+    field_resolver = TicketFieldResolver(
+        client.fetch_ticket_fields(), client.fetch_company_fields()
+    )
     value_detail = resolve_ticket_detail_values(raw_detail, client, field_resolver)
     main_row = build_ticket_detail_main_row(value_detail)
     custom_rows = build_ticket_detail_custom_field_rows(raw_detail, value_detail)
@@ -725,6 +728,8 @@ def import_ticket_detail_to_mysql(
         "main_rows": 1,
         "custom_field_rows": len(custom_rows),
     }
+
+
 def import_month_tickets_serial(
     config: MySQLConfig,
     dictionary: DataDictionary,
@@ -738,7 +743,11 @@ def import_month_tickets_serial(
     from .ticket_import import import_month_tickets_serial as implementation
 
     return implementation(
-        config, dictionary, client, year, month,
+        config,
+        dictionary,
+        client,
+        year,
+        month,
         per_page=per_page,
         limit_per_month=limit_per_month,
         output_dir=output_dir,
@@ -760,7 +769,11 @@ def import_month_tickets_to_mysql(
     from .ticket_import import import_month_tickets_to_mysql as implementation
 
     return implementation(
-        config, dictionary, client, year, month,
+        config,
+        dictionary,
+        client,
+        year,
+        month,
         per_page=per_page,
         limit_per_month=limit_per_month,
         max_workers=max_workers,
@@ -785,7 +798,10 @@ def import_year_tickets_to_mysql(
     from .ticket_import import import_year_tickets_to_mysql as implementation
 
     return implementation(
-        config, dictionary, client, year,
+        config,
+        dictionary,
+        client,
+        year,
         months=months,
         per_page=per_page,
         limit_per_month=limit_per_month,
@@ -832,7 +848,9 @@ def _commit_batch_atomic(*args: Any, **kwargs: Any) -> dict[str, Any]:
     return implementation(*args, **kwargs)
 
 
-def _fetch_batch_details(*args: Any, **kwargs: Any) -> tuple[dict[str, tuple[dict[str, Any], dict[str, Any]]], FailureCollector]:
+def _fetch_batch_details(
+    *args: Any, **kwargs: Any
+) -> tuple[dict[str, tuple[dict[str, Any], dict[str, Any]]], FailureCollector]:
     from .ticket_import import _fetch_batch_details as implementation
 
     return implementation(*args, **kwargs)
@@ -861,6 +879,7 @@ def _safe_rollback(connection: Any) -> None:
 
     implementation(connection)
 
+
 def import_customers_to_mysql(
     config: MySQLConfig,
     client: WorkOrderClient,
@@ -873,7 +892,11 @@ def import_customers_to_mysql(
     from .customer_contact_sync import sync_customer_entities
 
     report = sync_customer_entities(
-        config, client, sources=sources, require_nonempty=require_nonempty, max_records=max_records,
+        config,
+        client,
+        sources=sources,
+        require_nonempty=require_nonempty,
+        max_records=max_records,
     )
     return {
         "total": report.fetched,
@@ -904,20 +927,26 @@ def import_customers_to_mysql(
         else:
             continue
         for item in fetched:
-            cid = str(item.get("companyId") or item.get("customerId") or item.get("id") or "").strip()
+            cid = str(
+                item.get("companyId") or item.get("customerId") or item.get("id") or ""
+            ).strip()
             if not cid or cid in seen_ids:
                 continue
             seen_ids.add(cid)
-            rows.append({
-                "customer_id": cid,
-                "customer_name": _text_or_none(item.get("companyName") or item.get("customerName") or item.get("name")),
-                "customer_type": _text_or_none(item.get("customerType") or item.get("type")),
-                "province": _text_or_none(item.get("province") or item.get("area")),
-                "city": _text_or_none(item.get("city")),
-                "district": _text_or_none(item.get("district")),
-                "address": _text_or_none(item.get("address")),
-                "source_flags": source,
-            })
+            rows.append(
+                {
+                    "customer_id": cid,
+                    "customer_name": _text_or_none(
+                        item.get("companyName") or item.get("customerName") or item.get("name")
+                    ),
+                    "customer_type": _text_or_none(item.get("customerType") or item.get("type")),
+                    "province": _text_or_none(item.get("province") or item.get("area")),
+                    "city": _text_or_none(item.get("city")),
+                    "district": _text_or_none(item.get("district")),
+                    "address": _text_or_none(item.get("address")),
+                    "source_flags": source,
+                }
+            )
 
     pymysql = _pymysql()
     with pymysql.connect(
@@ -935,7 +964,9 @@ def import_customers_to_mysql(
                     columns = list(row.keys())
                     placeholders = ", ".join(["%s"] * len(columns))
                     column_sql = ", ".join(f"`{c}`" for c in columns)
-                    update_sql = ", ".join(f"`{c}` = VALUES(`{c}`)" for c in columns if c != "customer_id")
+                    update_sql = ", ".join(
+                        f"`{c}` = VALUES(`{c}`)" for c in columns if c != "customer_id"
+                    )
                     values = [row[c] for c in columns]
                     cursor.execute(
                         f"INSERT INTO customers ({column_sql}) VALUES ({placeholders}) "
@@ -974,7 +1005,11 @@ def import_contacts_to_mysql(
     from .customer_contact_sync import sync_contact_entities
 
     report = sync_contact_entities(
-        config, client, sources=sources, require_nonempty=require_nonempty, max_records=max_records,
+        config,
+        client,
+        sources=sources,
+        require_nonempty=require_nonempty,
+        max_records=max_records,
     )
     return {
         "total": report.fetched,
@@ -1005,23 +1040,41 @@ def import_contacts_to_mysql(
         else:
             continue
         for item in fetched:
-            cid = str(item.get("contactId") or item.get("cId") or item.get("userId") or item.get("id") or "").strip()
+            cid = str(
+                item.get("contactId")
+                or item.get("cId")
+                or item.get("userId")
+                or item.get("id")
+                or ""
+            ).strip()
             if not cid or cid in seen_ids:
                 continue
             seen_ids.add(cid)
-            rows.append({
-                "contact_id": cid,
-                "contact_name": _text_or_none(item.get("contactName") or item.get("realName") or item.get("name")),
-                "phone": _text_or_none(item.get("phone") or item.get("mobile") or item.get("fixnumber")),
-                "email": _text_or_none(item.get("email")),
-                "qq": _text_or_none(item.get("qq")),
-                "wechat": _text_or_none(item.get("wechat")),
-                "customer_id": _text_or_none(item.get("companyId") or item.get("customerId")),
-                "customer_name": _text_or_none(item.get("companyName") or item.get("customerName")),
-                "department_name": _text_or_none(item.get("departmentName") or item.get("department")),
-                "position_name": _text_or_none(item.get("positionName") or item.get("position")),
-                "source_flags": source,
-            })
+            rows.append(
+                {
+                    "contact_id": cid,
+                    "contact_name": _text_or_none(
+                        item.get("contactName") or item.get("realName") or item.get("name")
+                    ),
+                    "phone": _text_or_none(
+                        item.get("phone") or item.get("mobile") or item.get("fixnumber")
+                    ),
+                    "email": _text_or_none(item.get("email")),
+                    "qq": _text_or_none(item.get("qq")),
+                    "wechat": _text_or_none(item.get("wechat")),
+                    "customer_id": _text_or_none(item.get("companyId") or item.get("customerId")),
+                    "customer_name": _text_or_none(
+                        item.get("companyName") or item.get("customerName")
+                    ),
+                    "department_name": _text_or_none(
+                        item.get("departmentName") or item.get("department")
+                    ),
+                    "position_name": _text_or_none(
+                        item.get("positionName") or item.get("position")
+                    ),
+                    "source_flags": source,
+                }
+            )
 
     pymysql = _pymysql()
     with pymysql.connect(
@@ -1039,7 +1092,9 @@ def import_contacts_to_mysql(
                     columns = list(row.keys())
                     placeholders = ", ".join(["%s"] * len(columns))
                     column_sql = ", ".join(f"`{c}`" for c in columns)
-                    update_sql = ", ".join(f"`{c}` = VALUES(`{c}`)" for c in columns if c != "contact_id")
+                    update_sql = ", ".join(
+                        f"`{c}` = VALUES(`{c}`)" for c in columns if c != "contact_id"
+                    )
                     values = [row[c] for c in columns]
                     cursor.execute(
                         f"INSERT INTO contacts ({column_sql}) VALUES ({placeholders}) "
@@ -1070,10 +1125,12 @@ def import_contacts_to_mysql(
 # sync_task_log 写入
 # ---------------------------------------------------------------------------
 
+
 def _write_sync_log(*args: Any, **kwargs: Any) -> None:
     """Compatibility facade for the extracted sync log writer."""
 
     write_sync_log(*args, **kwargs)
+
 
 def build_ticket_detail_main_row(value_detail: dict[str, Any]) -> dict[str, Any]:
     """把 value_resolved 工单详情顶层字段转换为主表行。"""
@@ -1125,9 +1182,17 @@ def build_ticket_detail_custom_field_rows(
     """把 custom_fields 转换为明细表多行。"""
 
     ticket_id = int(str(raw_detail.get("ticketId") or value_detail.get("ticketId")))
-    template_id = _text_or_none(value_detail.get("ticketTemplateId") or raw_detail.get("ticketTemplateId"))
-    raw_fields = raw_detail.get("custom_fields") if isinstance(raw_detail.get("custom_fields"), list) else []
-    value_fields = value_detail.get("custom_fields") if isinstance(value_detail.get("custom_fields"), list) else []
+    template_id = _text_or_none(
+        value_detail.get("ticketTemplateId") or raw_detail.get("ticketTemplateId")
+    )
+    raw_fields = (
+        raw_detail.get("custom_fields") if isinstance(raw_detail.get("custom_fields"), list) else []
+    )
+    value_fields = (
+        value_detail.get("custom_fields")
+        if isinstance(value_detail.get("custom_fields"), list)
+        else []
+    )
 
     # create_dt 用于分区：从 value_detail 的 create_dt 取，需转成 date
     create_dt_raw = value_detail.get("create_dt") or raw_detail.get("createDT")
@@ -1139,8 +1204,16 @@ def build_ticket_detail_custom_field_rows(
     rows: list[dict[str, Any]] = []
     max_len = max(len(raw_fields), len(value_fields))
     for index in range(max_len):
-        raw_item = raw_fields[index] if index < len(raw_fields) and isinstance(raw_fields[index], dict) else {}
-        value_item = value_fields[index] if index < len(value_fields) and isinstance(value_fields[index], dict) else {}
+        raw_item = (
+            raw_fields[index]
+            if index < len(raw_fields) and isinstance(raw_fields[index], dict)
+            else {}
+        )
+        value_item = (
+            value_fields[index]
+            if index < len(value_fields) and isinstance(value_fields[index], dict)
+            else {}
+        )
         field_value = value_item.get("value", raw_item.get("value"))
         rows.append(
             {
@@ -1154,7 +1227,9 @@ def build_ticket_detail_custom_field_rows(
                 "field_key": _text_or_none(raw_item.get("key")) or "",
                 "field_name": _text_or_none(value_item.get("key") or raw_item.get("key")),
                 "field_value": _text_or_none(field_value),
-                "field_value_json": _json_or_none(field_value) if isinstance(field_value, (dict, list)) else None,
+                "field_value_json": _json_or_none(field_value)
+                if isinstance(field_value, (dict, list))
+                else None,
                 "field_value_type": _value_type(field_value),
                 "last_sync_at": datetime.now(),
             }
@@ -1165,6 +1240,7 @@ def build_ticket_detail_custom_field_rows(
 # ---------------------------------------------------------------------------
 # 写入 / 更新（单事务，按条提交在外层）
 # ---------------------------------------------------------------------------
+
 
 def upsert_ticket_detail(
     config: MySQLConfig,
@@ -1193,7 +1269,9 @@ def upsert_ticket_detail(
             raise
 
 
-def _upsert_ticket_detail(cursor: Any, main_row: dict[str, Any], custom_rows: list[dict[str, Any]]) -> str:
+def _upsert_ticket_detail(
+    cursor: Any, main_row: dict[str, Any], custom_rows: list[dict[str, Any]]
+) -> str:
     """在同一个 cursor 上执行：主表 upsert + 自定义字段全量刷新。
 
     返回 'updated'（source_updated_at 有变化或主表为更新）/ 'inserted'。
@@ -1218,7 +1296,9 @@ def _upsert_ticket_detail(cursor: Any, main_row: dict[str, Any], custom_rows: li
     # 2) 主表 upsert
     placeholders = ", ".join(["%s"] * len(columns))
     column_sql = ", ".join(f"`{c}`" for c in columns)
-    update_sql = ", ".join(f"`{c}` = VALUES(`{c}`)" for c in columns if c not in ("ticket_id", "create_dt"))
+    update_sql = ", ".join(
+        f"`{c}` = VALUES(`{c}`)" for c in columns if c not in ("ticket_id", "create_dt")
+    )
     values = [main_row.get(c) for c in columns]
     cursor.execute(
         f"INSERT INTO ticket_detail_main ({column_sql}) VALUES ({placeholders}) "
@@ -1246,7 +1326,14 @@ def _main_columns() -> list[str]:
 
     base = list(MAIN_FIELD_COLUMN_MAP.values())
     analytic = list(ANALYTIC_COLUMNS)
-    derived = ["create_year", "create_month", "create_month_label", "last_sync_at", "sync_status", "sync_error"]
+    derived = [
+        "create_year",
+        "create_month",
+        "create_month_label",
+        "last_sync_at",
+        "sync_status",
+        "sync_error",
+    ]
     return base + analytic + derived
 
 
@@ -1304,13 +1391,16 @@ def _insert_custom_rows(cursor: Any, rows: list[dict[str, Any]]) -> None:
 # 小工具
 # ---------------------------------------------------------------------------
 
+
 def _pymysql() -> Any:
     """延迟导入 PyMySQL，便于没有使用 MySQL 功能时仍可运行其它命令。"""
 
     try:
         import pymysql
     except ImportError as exc:
-        raise ApiError("Missing dependency PyMySQL. Run `uv sync` before using MySQL commands.") from exc
+        raise ApiError(
+            "Missing dependency PyMySQL. Run `uv sync` before using MySQL commands."
+        ) from exc
     return pymysql
 
 

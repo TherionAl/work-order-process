@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Iterable, Sequence
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from openpyxl import load_workbook
 
-from .config import MySQLConfig
 from .auxiliary_schema import ensure_auxiliary_schema
+from .config import MySQLConfig
 from .import_failures import FailureCollector, ImportFailure
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ class CustomerAccountImportError(RuntimeError):
     ) -> None:
         super().__init__(message)
         self.failure = failure
+
 
 # Excel 列名 → DB 列名（按顺序对应 Sheet1 的 40 列）
 COLUMN_MAP = [
@@ -121,7 +123,7 @@ def _to_decimal(value) -> float | None:
         return None
     try:
         return float(str(value).replace(",", "").strip())
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
 
 
@@ -130,7 +132,7 @@ def _to_int(value) -> int | None:
         return None
     try:
         return int(float(value))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
 
 
@@ -248,7 +250,9 @@ def prepare_customer_account_row(
 ) -> list[object] | None:
     """Strictly convert one source row or discard it under the name-cleaning rule."""
     prepared = [
-        convert_strict(column, values[index] if index < len(values) else None, source_row=source_row)
+        convert_strict(
+            column, values[index] if index < len(values) else None, source_row=source_row
+        )
         for index, (_, column) in enumerate(COLUMN_MAP)
     ]
     if prepared[1] is None and prepared[2] is None:
@@ -294,17 +298,11 @@ def _load_stage_rows(
     return counts
 
 
-def _publish_staged_snapshot(
-    cursor: Any, *, create_date: str, expected_rows: int
-) -> None:
+def _publish_staged_snapshot(cursor: Any, *, create_date: str, expected_rows: int) -> None:
     """Replace exactly one formal snapshot from the validated temporary stage."""
-    cursor.execute(
-        "DELETE FROM customer_account WHERE create_date = %s", (create_date,)
-    )
+    cursor.execute("DELETE FROM customer_account WHERE create_date = %s", (create_date,))
     cursor.execute(PUBLISH_STAGE_SQL)
-    cursor.execute(
-        "SELECT COUNT(*) FROM customer_account WHERE create_date = %s", (create_date,)
-    )
+    cursor.execute("SELECT COUNT(*) FROM customer_account WHERE create_date = %s", (create_date,))
     published_rows = cursor.fetchone()[0]
     if published_rows != expected_rows:
         raise CustomerAccountImportError(
@@ -381,9 +379,7 @@ def _import_customer_account_snapshot(
     except Exception as exc:
         if conn is not None:
             conn.rollback()
-        safe_message = STAGE_FAILURE_MESSAGES.get(
-            current_stage, "customer account import failed"
-        )
+        safe_message = STAGE_FAILURE_MESSAGES.get(current_stage, "customer account import failed")
         failure = failures.capture(
             stage=current_stage,
             exc=CustomerAccountImportError(safe_message),
@@ -430,9 +426,7 @@ def import_customer_account_xlsx(
 
     返回 {"file": ..., "rows": ..., "inserted": ..., "skipped": ..., "seconds": ...}
     """
-    return _import_customer_account_snapshot(
-        config, file_path, create_date, sheet_name, batch_size
-    )
+    return _import_customer_account_snapshot(config, file_path, create_date, sheet_name, batch_size)
 
 
 def main():
@@ -446,6 +440,7 @@ def main():
     args = parser.parse_args()
 
     from .config import load_settings
+
     settings = load_settings()
     result = import_customer_account_xlsx(
         settings.mysql, Path(args.file), args.create_date, args.sheet, args.batch_size

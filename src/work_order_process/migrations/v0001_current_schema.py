@@ -4,14 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-
 VERSION = 1
 NAME = "current_schema"
 
 # This payload is intentionally frozen here. Runtime schema constants may evolve
 # only through later migration versions; changing this file changes its checksum.
 _TABLE_DDLS: tuple[tuple[str, str], ...] = (
-    ('ticket_detail_main', """
+    (
+        "ticket_detail_main",
+        """
 CREATE TABLE IF NOT EXISTS ticket_detail_main (
   ticket_id BIGINT NOT NULL COMMENT '工单ID',
   subject VARCHAR(1000) NULL COMMENT '标题',
@@ -119,8 +120,11 @@ PARTITION BY RANGE COLUMNS(create_dt) (
   PARTITION pmax    VALUES LESS THAN (MAXVALUE)
 )
 
-"""),
-    ('ticket_detail_custom_fields', """
+""",
+    ),
+    (
+        "ticket_detail_custom_fields",
+        """
 CREATE TABLE IF NOT EXISTS ticket_detail_custom_fields (
   id BIGINT NOT NULL AUTO_INCREMENT COMMENT '自增主键',
   ticket_id BIGINT NOT NULL COMMENT '工单ID',
@@ -175,8 +179,11 @@ PARTITION BY RANGE COLUMNS(create_dt) (
   PARTITION pmax    VALUES LESS THAN (MAXVALUE)
 )
 
-"""),
-    ('customers', """
+""",
+    ),
+    (
+        "customers",
+        """
 CREATE TABLE IF NOT EXISTS customers (
   customer_id VARCHAR(255) NOT NULL COMMENT '客户/公司ID',
   customer_name VARCHAR(500) NULL COMMENT '客户/公司名称',
@@ -197,8 +204,11 @@ CREATE TABLE IF NOT EXISTS customers (
   KEY idx_source_flags (source_flags)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='客户/公司表'
-"""),
-    ('contacts', """
+""",
+    ),
+    (
+        "contacts",
+        """
 CREATE TABLE IF NOT EXISTS contacts (
   contact_id VARCHAR(255) NOT NULL COMMENT '联系人ID',
   contact_name VARCHAR(255) NULL COMMENT '联系人姓名',
@@ -222,8 +232,11 @@ CREATE TABLE IF NOT EXISTS contacts (
   KEY idx_source_flags (source_flags)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='联系人表'
-"""),
-    ('sync_task_log', """
+""",
+    ),
+    (
+        "sync_task_log",
+        """
 CREATE TABLE IF NOT EXISTS sync_task_log (
   id BIGINT NOT NULL AUTO_INCREMENT COMMENT '自增主键',
   task_type VARCHAR(50) NOT NULL COMMENT '任务类型 ticket_detail/customer/contact',
@@ -247,8 +260,11 @@ CREATE TABLE IF NOT EXISTS sync_task_log (
   KEY idx_started_at (started_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='同步任务日志表'
-"""),
-    ('customer_history', """
+""",
+    ),
+    (
+        "customer_history",
+        """
 CREATE TABLE IF NOT EXISTS customer_history (
   customer_id VARCHAR(255) NOT NULL,
   version_no INT NOT NULL,
@@ -274,8 +290,11 @@ CREATE TABLE IF NOT EXISTS customer_history (
   KEY idx_customer_history_period (effective_from, effective_to)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='客户历史快照表'
-"""),
-    ('contact_history', """
+""",
+    ),
+    (
+        "contact_history",
+        """
 CREATE TABLE IF NOT EXISTS contact_history (
   contact_id VARCHAR(255) NOT NULL,
   version_no INT NOT NULL,
@@ -302,8 +321,11 @@ CREATE TABLE IF NOT EXISTS contact_history (
   KEY idx_contact_history_period (effective_from, effective_to)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='联系人历史快照表'
-"""),
-    ('customer_contact_relation_history', """
+""",
+    ),
+    (
+        "customer_contact_relation_history",
+        """
 CREATE TABLE IF NOT EXISTS customer_contact_relation_history (
   contact_id VARCHAR(255) NOT NULL,
   version_no INT NOT NULL,
@@ -319,8 +341,11 @@ CREATE TABLE IF NOT EXISTS customer_contact_relation_history (
   KEY idx_relation_period (effective_from, effective_to)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='联系人客户归属历史表'
-"""),
-    ('api_sync_batch', """
+""",
+    ),
+    (
+        "api_sync_batch",
+        """
 CREATE TABLE IF NOT EXISTS api_sync_batch (
   sync_batch_id CHAR(36) NOT NULL,
   entity_type VARCHAR(20) NOT NULL,
@@ -338,8 +363,11 @@ CREATE TABLE IF NOT EXISTS api_sync_batch (
   KEY idx_api_sync_batch_entity_status (entity_type, status, started_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='客户联系人API同步批次'
-"""),
-    ('api_raw_record', """
+""",
+    ),
+    (
+        "api_raw_record",
+        """
 CREATE TABLE IF NOT EXISTS api_raw_record (
   id BIGINT NOT NULL AUTO_INCREMENT,
   sync_batch_id CHAR(36) NOT NULL,
@@ -353,38 +381,295 @@ CREATE TABLE IF NOT EXISTS api_raw_record (
   KEY idx_api_raw_entity (entity_type, source_record_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='客户联系人API原始留档'
-"""),
+""",
+    ),
 )
 
 _COMPATIBILITY_ALTERS: dict[str, tuple[tuple[str, str], ...]] = {
-    'ticket_detail_main': (
-        ('ticket_category', "ALTER TABLE ticket_detail_main ADD COLUMN ticket_category VARCHAR(50) NULL COMMENT '工单类别' AFTER region_text"),
+    "ticket_detail_main": (
+        (
+            "ticket_category",
+            "ALTER TABLE ticket_detail_main ADD COLUMN ticket_category VARCHAR(50) NULL COMMENT '工单类别' AFTER region_text",
+        ),
     ),
-    'customers': (
-        ('contact_name', "ALTER TABLE customers ADD COLUMN `contact_name` VARCHAR(255) NULL COMMENT '主联系人姓名'"),
-        ('phone', "ALTER TABLE customers ADD COLUMN `phone` VARCHAR(100) NULL COMMENT '主联系人电话'"),
-        ('email', "ALTER TABLE customers ADD COLUMN `email` VARCHAR(255) NULL COMMENT '主联系人邮箱'"),
-        ('row_hash', "ALTER TABLE customers ADD COLUMN `row_hash` CHAR(64) NULL COMMENT '业务字段哈希'"),
-        ('sync_batch_id', "ALTER TABLE customers ADD COLUMN `sync_batch_id` CHAR(36) NULL COMMENT '最近同步批次'"),
+    "customers": (
+        (
+            "contact_name",
+            "ALTER TABLE customers ADD COLUMN `contact_name` VARCHAR(255) NULL COMMENT '主联系人姓名'",
+        ),
+        (
+            "phone",
+            "ALTER TABLE customers ADD COLUMN `phone` VARCHAR(100) NULL COMMENT '主联系人电话'",
+        ),
+        (
+            "email",
+            "ALTER TABLE customers ADD COLUMN `email` VARCHAR(255) NULL COMMENT '主联系人邮箱'",
+        ),
+        (
+            "row_hash",
+            "ALTER TABLE customers ADD COLUMN `row_hash` CHAR(64) NULL COMMENT '业务字段哈希'",
+        ),
+        (
+            "sync_batch_id",
+            "ALTER TABLE customers ADD COLUMN `sync_batch_id` CHAR(36) NULL COMMENT '最近同步批次'",
+        ),
     ),
-    'contacts': (
-        ('fixed_phone', "ALTER TABLE contacts ADD COLUMN `fixed_phone` VARCHAR(100) NULL COMMENT '固定电话'"),
-        ('row_hash', "ALTER TABLE contacts ADD COLUMN `row_hash` CHAR(64) NULL COMMENT '业务字段哈希'"),
-        ('sync_batch_id', "ALTER TABLE contacts ADD COLUMN `sync_batch_id` CHAR(36) NULL COMMENT '最近同步批次'"),
+    "contacts": (
+        (
+            "fixed_phone",
+            "ALTER TABLE contacts ADD COLUMN `fixed_phone` VARCHAR(100) NULL COMMENT '固定电话'",
+        ),
+        (
+            "row_hash",
+            "ALTER TABLE contacts ADD COLUMN `row_hash` CHAR(64) NULL COMMENT '业务字段哈希'",
+        ),
+        (
+            "sync_batch_id",
+            "ALTER TABLE contacts ADD COLUMN `sync_batch_id` CHAR(36) NULL COMMENT '最近同步批次'",
+        ),
     ),
 }
 
 _REQUIRED_COLUMNS: dict[str, frozenset[str]] = {
-    'ticket_detail_main': frozenset(('ticket_id', 'subject', 'descript', 'cust_user_id', 'cust_user_name', 'company_id', 'company_name', 'servicer_user_id', 'servicer_user_name', 'cc_user_id_list', 'ticket_type', 'priority_level', 'tag_list', 'ticket_status', 'create_dt', 'source_updated_at', 'solve_dt', 'wait_dt', 'open_dt', 'close_dt', 'servicer_group_id', 'servicer_group_name', 'creater_id', 'creater_name', 'agent_id', 'ticket_source', 'ticket_template_id', 'ticket_template_name', 'cc_group_id_list', 'custom_template_id', 'creater_type', 'current_node_field', 'current_node_field_value', 'node_field_into_time', 'query_ids', 'workflow_node_id', 'workflow_id', 'is_deleted', 'deleter_id', 'delete_dt', 'descript_attachments', 'create_year', 'create_month', 'create_month_label', 'last_sync_at', 'sync_status', 'sync_error', 'province', 'city', 'district', 'region_text', 'ticket_category', 'product_line', 'module_name', 'problem_type', 'customer_type', 'customer_industry', 'department_id', 'department_name', 'current_node_name', 'current_node_status', 'current_node_started_at', 'current_node_duration_seconds', 'created_at', 'updated_at')),
-    'ticket_detail_custom_fields': frozenset(('id', 'ticket_id', 'ticket_template_id', 'create_dt', 'create_year', 'create_month', 'create_month_label', 'field_order', 'field_key', 'field_name', 'field_value', 'field_value_json', 'field_value_type', 'last_sync_at', 'created_at', 'updated_at')),
-    'customers': frozenset(('customer_id', 'customer_name', 'customer_type', 'province', 'city', 'district', 'address', 'source_flags', 'source_updated_at', 'last_sync_at', 'created_at', 'updated_at', 'contact_name', 'phone', 'email', 'row_hash', 'sync_batch_id')),
-    'contacts': frozenset(('contact_id', 'contact_name', 'phone', 'email', 'qq', 'wechat', 'customer_id', 'customer_name', 'department_name', 'position_name', 'source_flags', 'source_updated_at', 'last_sync_at', 'created_at', 'updated_at', 'fixed_phone', 'row_hash', 'sync_batch_id')),
-    'sync_task_log': frozenset(('id', 'task_type', 'target_year', 'target_month', 'target_month_label', 'status', 'total_count', 'success_count', 'failed_count', 'skipped_count', 'started_at', 'finished_at', 'duration_seconds', 'error_message', 'extra_json', 'created_at')),
-    'customer_history': frozenset(('customer_id', 'version_no', 'customer_name', 'customer_type', 'province', 'city', 'district', 'address', 'contact_name', 'phone', 'email', 'source_flags', 'source_updated_at', 'row_hash', 'sync_batch_id', 'effective_from', 'effective_to', 'is_current', 'created_at')),
-    'contact_history': frozenset(('contact_id', 'version_no', 'contact_name', 'phone', 'fixed_phone', 'email', 'qq', 'wechat', 'customer_id', 'customer_name', 'department_name', 'position_name', 'source_flags', 'source_updated_at', 'row_hash', 'sync_batch_id', 'effective_from', 'effective_to', 'is_current', 'created_at')),
-    'customer_contact_relation_history': frozenset(('contact_id', 'version_no', 'customer_id', 'customer_name', 'sync_batch_id', 'effective_from', 'effective_to', 'is_current', 'created_at')),
-    'api_sync_batch': frozenset(('sync_batch_id', 'entity_type', 'status', 'fetched_count', 'raw_saved_count', 'inserted_count', 'changed_count', 'unchanged_count', 'failed_count', 'error_message', 'started_at', 'finished_at')),
-    'api_raw_record': frozenset(('id', 'sync_batch_id', 'entity_type', 'source_name', 'source_record_id', 'payload_json', 'created_at')),
+    "ticket_detail_main": frozenset(
+        (
+            "ticket_id",
+            "subject",
+            "descript",
+            "cust_user_id",
+            "cust_user_name",
+            "company_id",
+            "company_name",
+            "servicer_user_id",
+            "servicer_user_name",
+            "cc_user_id_list",
+            "ticket_type",
+            "priority_level",
+            "tag_list",
+            "ticket_status",
+            "create_dt",
+            "source_updated_at",
+            "solve_dt",
+            "wait_dt",
+            "open_dt",
+            "close_dt",
+            "servicer_group_id",
+            "servicer_group_name",
+            "creater_id",
+            "creater_name",
+            "agent_id",
+            "ticket_source",
+            "ticket_template_id",
+            "ticket_template_name",
+            "cc_group_id_list",
+            "custom_template_id",
+            "creater_type",
+            "current_node_field",
+            "current_node_field_value",
+            "node_field_into_time",
+            "query_ids",
+            "workflow_node_id",
+            "workflow_id",
+            "is_deleted",
+            "deleter_id",
+            "delete_dt",
+            "descript_attachments",
+            "create_year",
+            "create_month",
+            "create_month_label",
+            "last_sync_at",
+            "sync_status",
+            "sync_error",
+            "province",
+            "city",
+            "district",
+            "region_text",
+            "ticket_category",
+            "product_line",
+            "module_name",
+            "problem_type",
+            "customer_type",
+            "customer_industry",
+            "department_id",
+            "department_name",
+            "current_node_name",
+            "current_node_status",
+            "current_node_started_at",
+            "current_node_duration_seconds",
+            "created_at",
+            "updated_at",
+        )
+    ),
+    "ticket_detail_custom_fields": frozenset(
+        (
+            "id",
+            "ticket_id",
+            "ticket_template_id",
+            "create_dt",
+            "create_year",
+            "create_month",
+            "create_month_label",
+            "field_order",
+            "field_key",
+            "field_name",
+            "field_value",
+            "field_value_json",
+            "field_value_type",
+            "last_sync_at",
+            "created_at",
+            "updated_at",
+        )
+    ),
+    "customers": frozenset(
+        (
+            "customer_id",
+            "customer_name",
+            "customer_type",
+            "province",
+            "city",
+            "district",
+            "address",
+            "source_flags",
+            "source_updated_at",
+            "last_sync_at",
+            "created_at",
+            "updated_at",
+            "contact_name",
+            "phone",
+            "email",
+            "row_hash",
+            "sync_batch_id",
+        )
+    ),
+    "contacts": frozenset(
+        (
+            "contact_id",
+            "contact_name",
+            "phone",
+            "email",
+            "qq",
+            "wechat",
+            "customer_id",
+            "customer_name",
+            "department_name",
+            "position_name",
+            "source_flags",
+            "source_updated_at",
+            "last_sync_at",
+            "created_at",
+            "updated_at",
+            "fixed_phone",
+            "row_hash",
+            "sync_batch_id",
+        )
+    ),
+    "sync_task_log": frozenset(
+        (
+            "id",
+            "task_type",
+            "target_year",
+            "target_month",
+            "target_month_label",
+            "status",
+            "total_count",
+            "success_count",
+            "failed_count",
+            "skipped_count",
+            "started_at",
+            "finished_at",
+            "duration_seconds",
+            "error_message",
+            "extra_json",
+            "created_at",
+        )
+    ),
+    "customer_history": frozenset(
+        (
+            "customer_id",
+            "version_no",
+            "customer_name",
+            "customer_type",
+            "province",
+            "city",
+            "district",
+            "address",
+            "contact_name",
+            "phone",
+            "email",
+            "source_flags",
+            "source_updated_at",
+            "row_hash",
+            "sync_batch_id",
+            "effective_from",
+            "effective_to",
+            "is_current",
+            "created_at",
+        )
+    ),
+    "contact_history": frozenset(
+        (
+            "contact_id",
+            "version_no",
+            "contact_name",
+            "phone",
+            "fixed_phone",
+            "email",
+            "qq",
+            "wechat",
+            "customer_id",
+            "customer_name",
+            "department_name",
+            "position_name",
+            "source_flags",
+            "source_updated_at",
+            "row_hash",
+            "sync_batch_id",
+            "effective_from",
+            "effective_to",
+            "is_current",
+            "created_at",
+        )
+    ),
+    "customer_contact_relation_history": frozenset(
+        (
+            "contact_id",
+            "version_no",
+            "customer_id",
+            "customer_name",
+            "sync_batch_id",
+            "effective_from",
+            "effective_to",
+            "is_current",
+            "created_at",
+        )
+    ),
+    "api_sync_batch": frozenset(
+        (
+            "sync_batch_id",
+            "entity_type",
+            "status",
+            "fetched_count",
+            "raw_saved_count",
+            "inserted_count",
+            "changed_count",
+            "unchanged_count",
+            "failed_count",
+            "error_message",
+            "started_at",
+            "finished_at",
+        )
+    ),
+    "api_raw_record": frozenset(
+        (
+            "id",
+            "sync_batch_id",
+            "entity_type",
+            "source_name",
+            "source_record_id",
+            "payload_json",
+            "created_at",
+        )
+    ),
 }
 
 

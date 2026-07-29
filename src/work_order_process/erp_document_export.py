@@ -9,9 +9,7 @@ from .erp_merge.pipeline import write_document_rows
 from .erp_schema import STANDARD_ERP_COLUMN_MAP, standard_headers
 
 
-def export_erp_snapshot_document(
-    config: MySQLConfig, create_date: str, output_file: Path
-) -> dict:
+def export_erp_snapshot_document(config: MySQLConfig, create_date: str, output_file: Path) -> dict:
     """Stream one ``erp_data`` snapshot into a non-importable document workbook."""
     import pymysql
 
@@ -27,9 +25,7 @@ def export_erp_snapshot_document(
     )
     try:
         with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT COUNT(*) FROM erp_data WHERE create_date = %s", (create_date,)
-            )
+            cursor.execute("SELECT COUNT(*) FROM erp_data WHERE create_date = %s", (create_date,))
             row_count = int(cursor.fetchone()[0])
             cursor.fetchall()
             if row_count == 0:

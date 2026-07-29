@@ -13,7 +13,6 @@ from typing import Any
 
 from .dictionary import DataDictionary
 
-
 DATE_KEYS = ("createDT", "createTime", "createdAt", "created_at", "createDate", "updateDT")
 CONTACT_ID_KEYS = ("custUserId", "contactId", "contacterId", "cId")
 COMPANY_ID_KEYS = ("companyId", "userId", "uId", "customerId")
@@ -52,7 +51,9 @@ def enrich_tickets(
     """
 
     contacts_by_id = _index_by_any(contacts, ("cId", "cid", "id", "contactId", "contacterId"))
-    customers_by_id = _index_by_any(customers, ("uId", "uid", "id", "userId", "customerId", "companyId"))
+    customers_by_id = _index_by_any(
+        customers, ("uId", "uid", "id", "userId", "customerId", "companyId")
+    )
 
     enriched: list[dict] = []
     for ticket in tickets:
@@ -119,7 +120,7 @@ def _first_datetime(row: dict, keys: tuple[str, ...]) -> datetime | None:
         return datetime.fromtimestamp(int(text[:10]))
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
         try:
-            return datetime.strptime(text[:19 if "%S" in fmt else 10], fmt)
+            return datetime.strptime(text[: 19 if "%S" in fmt else 10], fmt)
         except ValueError:
             continue
     return None

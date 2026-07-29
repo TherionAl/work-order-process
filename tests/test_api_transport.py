@@ -21,9 +21,7 @@ class ScriptedHTTPClient:
     def post(self, path: str, *, data: dict[str, object]) -> httpx.Response:
         return self._request("POST", path, data)
 
-    def _request(
-        self, method: str, path: str, data: dict[str, object]
-    ) -> httpx.Response:
+    def _request(self, method: str, path: str, data: dict[str, object]) -> httpx.Response:
         self.calls += 1
         self.requests.append((method, path, data))
         outcome = next(self._outcomes)
@@ -79,14 +77,17 @@ def test_permanent_client_errors_are_not_retried(status: int) -> None:
 def test_transient_server_errors_are_retried(status: int) -> None:
     client = ScriptedHTTPClient([httpx.Response(status), httpx.Response(200)])
 
-    assert request_with_retry(
-        client,
-        "GET",
-        "/tickets",
-        {},
-        sleep=lambda _: None,
-        random_value=lambda: 0.0,
-    ).status_code == 200
+    assert (
+        request_with_retry(
+            client,
+            "GET",
+            "/tickets",
+            {},
+            sleep=lambda _: None,
+            random_value=lambda: 0.0,
+        ).status_code
+        == 200
+    )
     assert client.calls == 2
 
 
@@ -108,9 +109,7 @@ def test_transport_error_stops_after_three_attempts() -> None:
 def test_post_sends_data_as_a_form() -> None:
     client = ScriptedHTTPClient([httpx.Response(200)])
 
-    response = request_with_retry(
-        client, "POST", "/tickets", {"subject": "example"}
-    )
+    response = request_with_retry(client, "POST", "/tickets", {"subject": "example"})
 
     assert response.status_code == 200
     assert client.requests == [("POST", "/tickets", {"subject": "example"})]
@@ -137,9 +136,12 @@ def test_retry_delay_uses_bounded_exponential_backoff_and_jitter() -> None:
 def test_invalid_retry_after_falls_back_to_backoff() -> None:
     response = httpx.Response(429, headers={"Retry-After": "not-a-number"})
 
-    assert retry_delay(
-        response,
-        1,
-        RetryPolicy(base_delay=2.0, jitter=0.25),
-        random_value=lambda: 0.0,
-    ) == 2.0
+    assert (
+        retry_delay(
+            response,
+            1,
+            RetryPolicy(base_delay=2.0, jitter=0.25),
+            random_value=lambda: 0.0,
+        )
+        == 2.0
+    )

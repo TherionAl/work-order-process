@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from work_order_process.config import MySQLConfig
 from work_order_process.erp_migrations import ensure_erp_allocation_columns
 
-
 ALLOCATION_COLUMNS = {
     "contract_days": "INT NULL COMMENT '合同天数'",
     "prev_year_period_start": "DATE NULL COMMENT '去年统计起始日期'",
@@ -72,7 +71,9 @@ class FakePyMySQL:
 
 
 def _config() -> MySQLConfig:
-    return MySQLConfig(host="db.example", port=3306, user="user", password="secret", database="warehouse")
+    return MySQLConfig(
+        host="db.example", port=3306, user="user", password="secret", database="warehouse"
+    )
 
 
 def _install_fake_pymysql(monkeypatch, existing_columns: set[str]) -> FakeCursor:
@@ -88,7 +89,9 @@ def test_adds_all_missing_allocation_columns_with_expected_definitions(monkeypat
 
     added = ensure_erp_allocation_columns(_config())
 
-    alters = [statement for statement, _ in cursor.statements if statement.startswith("ALTER TABLE")]
+    alters = [
+        statement for statement, _ in cursor.statements if statement.startswith("ALTER TABLE")
+    ]
     assert added == list(ALLOCATION_COLUMNS)
     assert len(alters) == 9
     for column, definition in ALLOCATION_COLUMNS.items():
@@ -99,7 +102,9 @@ def test_returns_empty_list_without_alter_when_allocation_columns_exist(monkeypa
     cursor = _install_fake_pymysql(monkeypatch, set(ALLOCATION_COLUMNS))
 
     assert ensure_erp_allocation_columns(_config()) == []
-    assert not [statement for statement, _ in cursor.statements if statement.startswith("ALTER TABLE")]
+    assert not [
+        statement for statement, _ in cursor.statements if statement.startswith("ALTER TABLE")
+    ]
 
 
 def test_adds_only_missing_allocation_columns(monkeypatch) -> None:
@@ -107,7 +112,9 @@ def test_adds_only_missing_allocation_columns(monkeypatch) -> None:
     cursor = _install_fake_pymysql(monkeypatch, existing)
 
     assert ensure_erp_allocation_columns(_config()) == ["contract_days", "cur_year_adjusted_amort"]
-    alters = [statement for statement, _ in cursor.statements if statement.startswith("ALTER TABLE")]
+    alters = [
+        statement for statement, _ in cursor.statements if statement.startswith("ALTER TABLE")
+    ]
     assert alters == [
         "ALTER TABLE erp_data ADD COLUMN contract_days INT NULL COMMENT '合同天数'",
         "ALTER TABLE erp_data ADD COLUMN cur_year_adjusted_amort DECIMAL(18,2) NULL COMMENT '今年倒签调整后分摊服务费'",

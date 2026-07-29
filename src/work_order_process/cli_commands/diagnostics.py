@@ -8,7 +8,6 @@ from ..api import ApiError, WorkOrderClient
 from ..config import ConfigError, Settings
 from ..dictionary import DataDictionary
 
-
 COMMANDS = frozenset(
     {
         "probe",
@@ -41,13 +40,17 @@ def handle(args: argparse.Namespace, settings: Settings, parser: argparse.Argume
             if args.command == "mysql-probe-customers":
                 _print_entity_probe(
                     client.probe_entity_paths(
-                        settings.endpoint.customer_paths, "customer", args.sample_size,
+                        settings.endpoint.customer_paths,
+                        "customer",
+                        args.sample_size,
                     )
                 )
             elif args.command == "mysql-probe-contacts":
                 _print_entity_probe(
                     client.probe_entity_paths(
-                        settings.endpoint.contact_paths, "contact", args.sample_size,
+                        settings.endpoint.contact_paths,
+                        "contact",
+                        args.sample_size,
                     )
                 )
             else:

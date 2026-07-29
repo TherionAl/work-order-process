@@ -31,13 +31,16 @@ def test_legacy_month_import_calls_new_implementation(
         lambda *args, **kwargs: sentinel,
     )
 
-    assert mysql_storage.import_month_tickets_to_mysql(
-        _config(),
-        None,
-        FakeClient(),
-        2026,
-        7,
-    ) is sentinel
+    assert (
+        mysql_storage.import_month_tickets_to_mysql(
+            _config(),
+            None,
+            FakeClient(),
+            2026,
+            7,
+        )
+        is sentinel
+    )
 
 
 def test_empty_api_month_returns_zero_report_without_schema_or_log_write(
@@ -59,9 +62,7 @@ def test_empty_api_month_returns_zero_report_without_schema_or_log_write(
         lambda *args, **kwargs: pytest.fail("empty month must not write log"),
     )
 
-    report = ticket_import.import_month_tickets_to_mysql(
-        _config(), None, FakeClient(), 2026, 7
-    )
+    report = ticket_import.import_month_tickets_to_mysql(_config(), None, FakeClient(), 2026, 7)
 
     assert report == {
         "month": "2026-07",
@@ -99,9 +100,7 @@ def test_current_month_rows_are_skipped_and_logged_as_success(
         lambda *args, **kwargs: logged.update(kwargs),
     )
 
-    report = ticket_import.import_month_tickets_to_mysql(
-        _config(), None, FakeClient(), 2026, 7
-    )
+    report = ticket_import.import_month_tickets_to_mysql(_config(), None, FakeClient(), 2026, 7)
 
     assert report["skipped"] == 3
     assert report["failed"] == 0
@@ -114,20 +113,14 @@ def test_missing_api_detail_and_database_failure_are_structured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api_failures = FailureCollector()
-    api_failures.capture(
-        stage="api", exc=RuntimeError("detail missing"), record_id="1"
-    )
+    api_failures.capture(stage="api", exc=RuntimeError("detail missing"), record_id="1")
     database_failures = FailureCollector()
-    database_failures.capture(
-        stage="database", exc=RuntimeError("row failed"), record_id="2"
-    )
+    database_failures.capture(stage="database", exc=RuntimeError("row failed"), record_id="2")
     logged: dict[str, Any] = {}
     monkeypatch.setattr(
         ticket_import,
         "_fetch_month_ticket_rows",
-        lambda *args, **kwargs: (
-            "2026-07", [{"ticketId": "1"}, {"ticketId": "2"}], "api"
-        ),
+        lambda *args, **kwargs: ("2026-07", [{"ticketId": "1"}, {"ticketId": "2"}], "api"),
     )
     monkeypatch.setattr(ticket_import, "ensure_mysql_schema", lambda config: None)
     monkeypatch.setattr(
@@ -161,9 +154,7 @@ def test_missing_api_detail_and_database_failure_are_structured(
         lambda *args, **kwargs: logged.update(kwargs),
     )
 
-    report = ticket_import.import_month_tickets_to_mysql(
-        _config(), None, FakeClient(), 2026, 7
-    )
+    report = ticket_import.import_month_tickets_to_mysql(_config(), None, FakeClient(), 2026, 7)
 
     assert report["failed_ids"] == ["1", "2"]
     assert [failure["stage"] for failure in report["failures"]] == ["api", "database"]
@@ -188,9 +179,7 @@ def test_year_import_returns_twelve_ordered_reports_and_totals(
 
     monkeypatch.setattr(ticket_import, "import_month_tickets_to_mysql", import_month)
 
-    report = ticket_import.import_year_tickets_to_mysql(
-        _config(), None, FakeClient(), 2026
-    )
+    report = ticket_import.import_year_tickets_to_mysql(_config(), None, FakeClient(), 2026)
 
     assert calls == list(range(1, 13))
     assert [month["month"] for month in report["months"]] == [

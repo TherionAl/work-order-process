@@ -18,7 +18,6 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-
 TARGET_TABLES = ("user", "contacter", "tickets", "user_ticket_reply")
 FIELD_ALIASES = {
     "contacter": {
@@ -118,7 +117,7 @@ class DataDictionary:
         }
 
     @classmethod
-    def from_pdf(cls, path: Path, target_tables: tuple[str, ...] = TARGET_TABLES) -> "DataDictionary":
+    def from_pdf(cls, path: Path, target_tables: tuple[str, ...] = TARGET_TABLES) -> DataDictionary:
         """从 PDF 中读取目标表字段定义。
 
         PDF 是最终中文字段名的主要来源；接口返回字段和 PDF 字段存在少量命名差异时，
@@ -132,7 +131,7 @@ class DataDictionary:
         if cache_path.exists() and cache_path.stat().st_mtime >= path.stat().st_mtime:
             try:
                 return cls.from_json(cache_path)
-            except (json.JSONDecodeError, KeyError):
+            except json.JSONDecodeError, KeyError:
                 pass  # 缓存损坏，重新解析
 
         text = "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
@@ -162,7 +161,7 @@ class DataDictionary:
         return instance
 
     @classmethod
-    def from_json(cls, path: Path) -> "DataDictionary":
+    def from_json(cls, path: Path) -> DataDictionary:
         """从缓存 JSON 文件读取数据字典。"""
 
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -185,9 +184,9 @@ class DataDictionary:
         """在指定表中查找英文字段对应的数据字典定义。"""
 
         lookup_key = FIELD_ALIASES.get(table, {}).get(key, key)
-        return self._field_maps.get(table, {}).get(lookup_key.lower()) or self._normalized_field_maps.get(table, {}).get(
-            _normalize_key(lookup_key)
-        )
+        return self._field_maps.get(table, {}).get(
+            lookup_key.lower()
+        ) or self._normalized_field_maps.get(table, {}).get(_normalize_key(lookup_key))
 
     def label(self, table: str, key: str) -> str:
         """返回字段中文标签；找不到时保留原英文 key。"""
@@ -213,16 +212,15 @@ class DataDictionary:
     def to_jsonable(self) -> dict[str, list[dict[str, str]]]:
         """把数据字典转换成可 JSON 序列化的结构。"""
 
-        return {
-            table: [asdict(field) for field in fields]
-            for table, fields in self.tables.items()
-        }
+        return {table: [asdict(field) for field in fields] for table, fields in self.tables.items()}
 
     def save_json(self, path: Path) -> None:
         """把解析后的数据字典保存为 JSON，便于人工核对字段映射。"""
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self.to_jsonable(), ensure_ascii=False, indent=2), encoding="utf-8")
+        path.write_text(
+            json.dumps(self.to_jsonable(), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
 
 def _iter_table_sections(lines: list[str]):

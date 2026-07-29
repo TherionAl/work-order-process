@@ -58,7 +58,9 @@ def test_export_erp_snapshot_document_reads_the_imported_snapshot(
     monkeypatch.setitem(
         sys.modules,
         "pymysql",
-        SimpleNamespace(connect=lambda **kwargs: connection, cursors=SimpleNamespace(SSCursor=object)),
+        SimpleNamespace(
+            connect=lambda **kwargs: connection, cursors=SimpleNamespace(SSCursor=object)
+        ),
     )
     output_file = tmp_path / "erp-document.xlsx"
 
@@ -70,7 +72,9 @@ def test_export_erp_snapshot_document_reads_the_imported_snapshot(
 
     assert report == {"create_date": "20260717", "rows": 1, "file": output_file.name}
     assert connection.closed is True
-    assert all(parameters == ("20260717",) for _, parameters in connection.cursor_instance.statements)
+    assert all(
+        parameters == ("20260717",) for _, parameters in connection.cursor_instance.statements
+    )
     workbook = load_workbook(output_file, data_only=True)
     assert workbook.sheetnames == ["文档数据"]
     data_sheet = workbook["文档数据"]

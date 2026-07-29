@@ -4,7 +4,6 @@ import re
 import subprocess
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TEXT_SUFFIXES = {"", ".md", ".py", ".toml", ".yml", ".yaml"}
 
@@ -29,9 +28,7 @@ def test_tracked_text_files_do_not_contain_known_credentials() -> None:
 
 
 def test_ci_runs_locked_python_314_test_suite() -> None:
-    text = (PROJECT_ROOT / ".github" / "workflows" / "test.yml").read_text(
-        encoding="utf-8"
-    )
+    text = (PROJECT_ROOT / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
     assert 'python-version: "3.14"' in text
     assert "uv lock --check" in text
     assert "uv sync --all-groups --locked" in text

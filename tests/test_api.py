@@ -41,10 +41,7 @@ def test_work_order_client_request_delegates_to_transport(monkeypatch) -> None:
     monkeypatch.setattr(
         api,
         "request_with_retry",
-        lambda http, method, path, data: calls.append(
-            (http, method, path, data)
-        )
-        or expected,
+        lambda http, method, path, data: calls.append((http, method, path, data)) or expected,
     )
 
     assert client._request("GET", "/tickets", {"page": 1}) is expected
@@ -94,7 +91,9 @@ def test_probe_entity_paths_reports_nonempty_and_empty_results(monkeypatch) -> N
         assert params["page"] == 1
         assert params["pageSize"] == 2
         if path == "/companies":
-            return httpx.Response(200, json={"count": 7, "companies": [{"uId": "C1", "companyName": "Example"}]})
+            return httpx.Response(
+                200, json={"count": 7, "companies": [{"uId": "C1", "companyName": "Example"}]}
+            )
         return httpx.Response(200, json={"count": 0, "companies": []})
 
     monkeypatch.setattr(client, "_first_successful_request", fake_fetch)
@@ -102,8 +101,20 @@ def test_probe_entity_paths_reports_nonempty_and_empty_results(monkeypatch) -> N
     report = client.probe_entity_paths(["/companies", "/customers"], "customer", sample_size=2)
 
     assert report == [
-        {"path": "/companies", "entity_type": "customer", "status": "ok", "count": 7, "sample_keys": ["companyName", "uId"]},
-        {"path": "/customers", "entity_type": "customer", "status": "empty", "count": 0, "sample_keys": []},
+        {
+            "path": "/companies",
+            "entity_type": "customer",
+            "status": "ok",
+            "count": 7,
+            "sample_keys": ["companyName", "uId"],
+        },
+        {
+            "path": "/customers",
+            "entity_type": "customer",
+            "status": "empty",
+            "count": 0,
+            "sample_keys": [],
+        },
     ]
     client.close()
 
@@ -115,7 +126,9 @@ def test_iter_entity_pages_yields_each_page_without_collecting_all_rows(monkeypa
     def fake_fetch(path: str, params: dict) -> httpx.Response:
         calls.append(params["page"])
         if params["page"] == 1:
-            return httpx.Response(200, json={"count": 3, "pageSize": 2, "companies": [{"uId": "C1"}, {"uId": "C2"}]})
+            return httpx.Response(
+                200, json={"count": 3, "pageSize": 2, "companies": [{"uId": "C1"}, {"uId": "C2"}]}
+            )
         return httpx.Response(200, json={"count": 3, "pageSize": 2, "companies": [{"uId": "C3"}]})
 
     monkeypatch.setattr(client, "_first_successful_request", fake_fetch)
@@ -128,18 +141,25 @@ def test_iter_entity_pages_yields_each_page_without_collecting_all_rows(monkeypa
     client.close()
 
 
-def test_iter_entity_pages_uses_declared_total_when_api_ignores_requested_page_size(monkeypatch) -> None:
+def test_iter_entity_pages_uses_declared_total_when_api_ignores_requested_page_size(
+    monkeypatch,
+) -> None:
     client = WorkOrderClient(_settings())
     calls: list[int] = []
 
     def fake_fetch(path: str, params: dict) -> httpx.Response:
         calls.append(params["page"])
         if params["page"] == 1:
-            return httpx.Response(200, json={"count": 101, "companies": [{"uId": str(index)} for index in range(100)]})
+            return httpx.Response(
+                200, json={"count": 101, "companies": [{"uId": str(index)} for index in range(100)]}
+            )
         return httpx.Response(200, json={"count": 101, "companies": [{"uId": "100"}]})
 
     monkeypatch.setattr(client, "_first_successful_request", fake_fetch)
 
-    assert [len(page) for page in client.iter_entity_pages(["/companies"], page_size=5000)] == [100, 1]
+    assert [len(page) for page in client.iter_entity_pages(["/companies"], page_size=5000)] == [
+        100,
+        1,
+    ]
     assert calls == [1, 2]
     client.close()

@@ -39,6 +39,7 @@ from .mysql_storage import (
 )
 from .schema_migrations import assert_schema_current
 
+
 def configure_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -81,15 +82,23 @@ def sync_tickets_for_month(year: int, month: int) -> dict[str, Any]:
     with WorkOrderClient(settings) as client:
         client.authenticate()
         report = import_month_tickets_to_mysql(
-            settings.mysql, dictionary, client,
-            year=year, month=month,
-            max_workers=8, batch_size=100, api_rate_limit=10,
+            settings.mysql,
+            dictionary,
+            client,
+            year=year,
+            month=month,
+            max_workers=8,
+            batch_size=100,
+            api_rate_limit=10,
         )
     logger.info(
         "%d-%02d 完成: imported=%d updated=%d skipped=%d failed=%d",
-        year, month,
-        report.get("imported", 0), report.get("updated", 0),
-        report.get("skipped", 0), report.get("failed", 0),
+        year,
+        month,
+        report.get("imported", 0),
+        report.get("updated", 0),
+        report.get("skipped", 0),
+        report.get("failed", 0),
     )
     return report
 
@@ -126,8 +135,7 @@ def maintenance_months(
     return [
         (target_year, month)
         for month in range(1, 13)
-        if (target_year, month) not in rolling
-        and datetime(target_year, month, 1) < now
+        if (target_year, month) not in rolling and datetime(target_year, month, 1) < now
     ]
 
 
@@ -210,7 +218,7 @@ def main() -> None:
     logger.info("  04:17 每月1号 = 当年90天前老月份 + 分区维护")
     try:
         sched.start()
-    except (KeyboardInterrupt, SystemExit):
+    except KeyboardInterrupt, SystemExit:
         logger.info("调度器已停止")
 
 

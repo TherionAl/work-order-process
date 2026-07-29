@@ -14,16 +14,20 @@ import copy
 import json
 import re
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from .api import WorkOrderClient
-from .dictionary import DataDictionary
-
 
 TICKET_TYPE = {"1": "问题", "2": "事务", "3": "故障", "4": "任务"}
 PRIORITY_LEVEL = {"1": "低", "2": "正常", "3": "高", "4": "紧急"}
-TICKET_STATUS = {"1": "新建", "2": "已开启", "3": "待回应", "4": "已解决", "5": "已关闭", "6": "已关闭"}
+TICKET_STATUS = {
+    "1": "新建",
+    "2": "已开启",
+    "3": "待回应",
+    "4": "已解决",
+    "5": "已关闭",
+    "6": "已关闭",
+}
 CREATER_TYPE = {"0": "客服", "1": "客户"}
 YES_NO = {"0": "否", "1": "是"}
 
@@ -35,7 +39,9 @@ class TicketFieldResolver:
     这里把它整理成两个索引，供 custom_fields 和 currentNodeField 相关字段快速替换。
     """
 
-    def __init__(self, fields: list[dict[str, Any]], extra_option_fields: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self, fields: list[dict[str, Any]], extra_option_fields: list[dict[str, Any]] | None = None
+    ) -> None:
         self.fields_by_key = {str(field.get("key")): field for field in fields if field.get("key")}
         self.options_by_field: dict[str, dict[str, str]] = {}
         self.options_by_key: dict[str, str] = {}
@@ -124,7 +130,9 @@ def resolve_ticket_detail_values(
     """
 
     row = copy.deepcopy(detail)
-    field_resolver = field_resolver or TicketFieldResolver(client.fetch_ticket_fields(), client.fetch_company_fields())
+    field_resolver = field_resolver or TicketFieldResolver(
+        client.fetch_ticket_fields(), client.fetch_company_fields()
+    )
 
     _replace_contact(row, client)
     _replace_support(row, "servicerUserId", client)
@@ -146,7 +154,6 @@ def resolve_ticket_detail_values(
     _extract_analytic_dimensions(row)
 
     return row
-
 
 
 def _replace_contact(row: dict[str, Any], client: WorkOrderClient) -> None:
@@ -273,9 +280,13 @@ def _replace_ticket_custom_fields(
     if current_field_key:
         row["currentNodeField"] = field_resolver.field_name(current_field_key)
     if row.get("currentNodeFieldValue") not in (None, ""):
-        row["currentNodeFieldValue"] = field_resolver.option_value(row.get("currentNodeFieldValue"), current_field_key)
+        row["currentNodeFieldValue"] = field_resolver.option_value(
+            row.get("currentNodeFieldValue"), current_field_key
+        )
     if "custom_fields" in row:
-        row["custom_fields"] = field_resolver.resolve_custom_fields(row.get("custom_fields"), client)
+        row["custom_fields"] = field_resolver.resolve_custom_fields(
+            row.get("custom_fields"), client
+        )
 
 
 def _resolve_support_custom_value(value: Any, client: WorkOrderClient) -> Any:

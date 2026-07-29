@@ -1,13 +1,11 @@
 import json
+from dataclasses import FrozenInstanceError
 
 import pytest
-
-from dataclasses import FrozenInstanceError
 
 import work_order_process.import_failures as import_failures
 from work_order_process.import_failures import (
     FailureCollector,
-    ImportFailure,
     sanitize_failure_message,
 )
 
@@ -17,9 +15,7 @@ def test_failure_collector_redacts_sensitive_values_and_limits_details() -> None
     collector.capture(
         stage="parse",
         source_row=2,
-        exc=ValueError(
-            "password=secret-value email=user@example.com phone=13800138000"
-        ),
+        exc=ValueError("password=secret-value email=user@example.com phone=13800138000"),
         secrets=("secret-value",),
     )
     collector.capture(stage="database", record_id="T2", exc=RuntimeError("deadlock"))
@@ -81,8 +77,7 @@ def test_capture_sanitizes_record_id_with_the_same_boundary_as_messages() -> Non
     failure = collector.capture(
         stage="database",
         record_id=(
-            'customer=user@example.com phone=13800138000 '
-            'password="my secret" token=api-secret'
+            'customer=user@example.com phone=13800138000 password="my secret" token=api-secret'
         ),
         exc=RuntimeError("deadlock"),
         secrets=("api-secret",),

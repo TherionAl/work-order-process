@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import argparse
 import logging
+from collections.abc import Iterable, Mapping
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from openpyxl import load_workbook
 
-from .config import MySQLConfig
 from .auxiliary_schema import ensure_auxiliary_schema
+from .config import MySQLConfig
 from .erp_schema import (
     LEGACY_ERP_COLUMN_MAP,
     STANDARD_ERP_COLUMN_MAP,
@@ -28,9 +29,7 @@ SALES_PLATFORM_BASELINE_KEY_COLUMNS = ("contract_id", "item_code", "exec_detail_
 COLUMN_MAP = LEGACY_ERP_COLUMN_MAP
 IMPORT_COLUMN_MAP = STANDARD_ERP_COLUMN_MAP
 IMPORT_COLUMNS = tuple(column for _, column in IMPORT_COLUMN_MAP)
-IMPORT_COLUMN_LABELS = {
-    column: header for header, column in IMPORT_COLUMN_MAP
-}
+IMPORT_COLUMN_LABELS = {column: header for header, column in IMPORT_COLUMN_MAP}
 STAGE_TABLE = "erp_data_import_stage"
 SNAPSHOT_KEY_COLUMNS = ("contract_id", "item_code", "exec_detail_id")
 ALLOCATION_COLUMNS = tuple(column for _, column in STANDARD_ERP_COLUMN_MAP[-9:])
@@ -86,7 +85,7 @@ def _to_decimal(value) -> Decimal | None:
         return None
     try:
         result = Decimal(text)
-    except (InvalidOperation, ValueError, TypeError):
+    except InvalidOperation, ValueError, TypeError:
         return None
     return result if result.is_finite() else None
 
@@ -96,7 +95,7 @@ def _to_int(value) -> int | None:
         return None
     try:
         return int(float(value))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
 
 
@@ -178,9 +177,7 @@ def convert(
                 else "ERP 数据"
             )
             label = IMPORT_COLUMN_LABELS.get(col_name, col_name)
-            raise ERPImportError(
-                f"{label}（{col_name}）在 {location}无法解析为金额: {value!r}"
-            )
+            raise ERPImportError(f"{label}（{col_name}）在 {location}无法解析为金额: {value!r}")
         return converted
     return _to_str(value)
 
@@ -218,9 +215,7 @@ def find_standard_sheet(workbook) -> Any:
             + ", ".join(duplicate_sheet_names)
             + "）。"
         )
-    raise ValueError(
-        "未找到 ERP 标准 Sheet1：首行必须恰好包含 69 列历史标准列头或 78 列标准列头。"
-    )
+    raise ValueError("未找到 ERP 标准 Sheet1：首行必须恰好包含 69 列历史标准列头或 78 列标准列头。")
 
 
 SalesPlatformBaseline = dict[tuple[str, str | None, str | None], str | None]
@@ -257,7 +252,9 @@ def apply_baseline_sales_platform(
     return True
 
 
-def load_sales_platform_baseline(cursor: Any, create_date: str = BASELINE_SALES_PLATFORM_CREATE_DATE) -> SalesPlatformBaseline:
+def load_sales_platform_baseline(
+    cursor: Any, create_date: str = BASELINE_SALES_PLATFORM_CREATE_DATE
+) -> SalesPlatformBaseline:
     """Load the sales_platform baseline keyed by contract/item/exec detail."""
     cursor.execute(
         """
@@ -302,8 +299,7 @@ def _validate_erp_row(
         missing = [column for column in ALLOCATION_COLUMNS if row.get(column) is None]
         if missing:
             raise ERPImportError(
-                f"标准 ERP 数据第 {source_row} 行缺少年度分摊字段: "
-                + ", ".join(missing)
+                f"标准 ERP 数据第 {source_row} 行缺少年度分摊字段: " + ", ".join(missing)
             )
 
 
@@ -317,9 +313,7 @@ def _insert_stage_batch(
     except Exception as exc:
         first_row = batch[0][0]
         last_row = batch[-1][0]
-        raise ERPImportError(
-            f"ERP 临时表写入失败，源数据行 {first_row}-{last_row}: {exc}"
-        ) from exc
+        raise ERPImportError(f"ERP 临时表写入失败，源数据行 {first_row}-{last_row}: {exc}") from exc
 
 
 def _validate_staged_snapshot(
@@ -353,8 +347,7 @@ def _validate_staged_snapshot(
         )
 
     cursor.execute(
-        f"SELECT COUNT(DISTINCT create_date), MIN(create_date), MAX(create_date) "
-        f"FROM {STAGE_TABLE}"
+        f"SELECT COUNT(DISTINCT create_date), MIN(create_date), MAX(create_date) FROM {STAGE_TABLE}"
     )
     distinct_count, minimum, maximum = cursor.fetchone()
     if int(distinct_count) != 1 or str(minimum) != create_date or str(maximum) != create_date:
@@ -383,8 +376,7 @@ def _publish_staged_snapshot(
     published_rows = int(cursor.fetchone()[0])
     if published_rows != expected_rows:
         raise ERPImportError(
-            f"ERP 正式快照行数不一致: expected={expected_rows}, "
-            f"published={published_rows}"
+            f"ERP 正式快照行数不一致: expected={expected_rows}, published={published_rows}"
         )
     return replaced_rows
 
@@ -398,8 +390,9 @@ def _import_erp_records(
     require_allocation_fields: bool = True,
 ) -> dict:
     """Import normalized ERP records using the same rules for every source."""
-    import pymysql
     import time
+
+    import pymysql
 
     ensure_auxiliary_schema(config)
     conn = pymysql.connect(
@@ -591,6 +584,7 @@ def main():
     args = parser.parse_args()
 
     from .config import load_settings
+
     settings = load_settings()
     result = import_erp_xlsx(settings.mysql, Path(args.file), args.batch_size)
     print(result)

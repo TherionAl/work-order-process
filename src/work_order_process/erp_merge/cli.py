@@ -3,9 +3,9 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
 
 from ..config import load_settings
 from ..erp_document_export import export_erp_snapshot_document
@@ -44,9 +44,16 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--last-year-start", help="去年统计起始日期，支持YYYY-MM-DD或YYYYMMDD格式")
     parser.add_argument("--last-year-end", help="去年统计截止日期，支持YYYY-MM-DD或YYYYMMDD格式")
-    parser.add_argument("--current-year-start", help="今年统计起始日期，支持YYYY-MM-DD或YYYYMMDD格式")
+    parser.add_argument(
+        "--current-year-start", help="今年统计起始日期，支持YYYY-MM-DD或YYYYMMDD格式"
+    )
     parser.add_argument("--current-year-end", help="今年统计截止日期，支持YYYY-MM-DD或YYYYMMDD格式")
-    parser.add_argument("--document-output", type=Path, required=True, help="数据库快照文档版 Excel 输出路径（不可导入）")
+    parser.add_argument(
+        "--document-output",
+        type=Path,
+        required=True,
+        help="数据库快照文档版 Excel 输出路径（不可导入）",
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -65,9 +72,7 @@ def validate_output_paths(standard_output: Path | None, document_output: Path) -
     resolved_output = os.path.normcase(str(standard_output.resolve()))
     resolved_document_output = os.path.normcase(str(document_output.resolve()))
     if resolved_output == resolved_document_output:
-        raise ValueError(
-            "--document-output and --standard-output must resolve to different paths"
-        )
+        raise ValueError("--document-output and --standard-output must resolve to different paths")
 
 
 def main(argv: Iterable[str] | None = None) -> None:

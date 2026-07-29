@@ -10,23 +10,22 @@
 
 from __future__ import annotations
 
-import json
-import os
 import copy
+import json
+import math
+import os
+import random
+import threading
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
-from functools import lru_cache
-import math
-import random
-import re
-import threading
-from typing import Any, Callable, Iterator, TypedDict
+from typing import Any, TypedDict
 
 import httpx
 
-from .config import Settings
 from .api_transport import request_with_retry
+from .config import Settings
 
 
 class ApiError(RuntimeError):
@@ -124,7 +123,7 @@ class WorkOrderClient:
 
         self._cache.clear()
 
-    def __enter__(self) -> "WorkOrderClient":
+    def __enter__(self) -> WorkOrderClient:
         """支持 with WorkOrderClient(...) as client 的用法。"""
 
         return self
@@ -153,7 +152,7 @@ class WorkOrderClient:
         groups: Iterable[str] | None = None,
         templates: Iterable[str] | None = None,
         max_workers: int = 8,
-        semaphore: "threading.Semaphore | None" = None,
+        semaphore: threading.Semaphore | None = None,
         progress_callback: Callable[[str, str], None] | None = None,
     ) -> None:
         """批量预取实体详情，填入缓存，后续 fetch_*_detail 直接命中缓存。
@@ -211,7 +210,9 @@ class WorkOrderClient:
                     response = self._request(method, path, {"page": 1, "pageSize": 1})
                     body = response.text[:180].replace("\n", " ")
                     ok = _looks_successful(response)
-                    results.append(EndpointResult(f"{method} {path}", response.status_code, ok, body))
+                    results.append(
+                        EndpointResult(f"{method} {path}", response.status_code, ok, body)
+                    )
                 except httpx.HTTPError as exc:
                     results.append(EndpointResult(f"{method} {path}", 0, False, str(exc)))
         return results
@@ -249,7 +250,14 @@ class WorkOrderClient:
             try:
                 response = self._first_successful_request(
                     path,
-                    {"page": 1, "pageNo": 1, "pageNum": 1, "current": 1, "pageSize": sample_size, "limit": sample_size},
+                    {
+                        "page": 1,
+                        "pageNo": 1,
+                        "pageNum": 1,
+                        "current": 1,
+                        "pageSize": sample_size,
+                        "limit": sample_size,
+                    },
                 )
                 if not _looks_successful(response):
                     raise ApiError(f"HTTP {response.status_code}: {response.text[:300]}")
@@ -257,7 +265,9 @@ class WorkOrderClient:
                 rows = _extract_items(body)
                 count = _declared_item_count(body, len(rows))
             except ApiError as exc:
-                reports.append({"path": path, "entity_type": entity_type, "status": "error", "error": str(exc)})
+                reports.append(
+                    {"path": path, "entity_type": entity_type, "status": "error", "error": str(exc)}
+                )
                 continue
             reports.append(
                 {
@@ -293,7 +303,9 @@ class WorkOrderClient:
     def iter_companies(self) -> Iterator[list[dict]]:
         """Yield company rows page by page for large imports."""
 
-        return self.iter_entity_pages(self.settings.endpoint.customer_paths, self.settings.page_size)
+        return self.iter_entity_pages(
+            self.settings.endpoint.customer_paths, self.settings.page_size
+        )
 
     def iter_contacts(self) -> Iterator[list[dict]]:
         """Yield contact rows page by page for large imports."""
@@ -339,7 +351,9 @@ class WorkOrderClient:
             return ticket[0] if ticket else None
         return ticket if isinstance(ticket, dict) else None
 
-    def search_tickets_by_create_month(self, month_label: str, page: int = 1, per_page: int = 1000) -> dict[str, Any]:
+    def search_tickets_by_create_month(
+        self, month_label: str, page: int = 1, per_page: int = 1000
+    ) -> dict[str, Any]:
         """按创建月份搜索工单列表。
 
         通用文档中的搜索接口支持 `query=createDT:YYYY-MM`，并返回匹配总数。
@@ -439,7 +453,12 @@ class WorkOrderClient:
 
         body = self._json_get_or_list("/tickettemplates")
         if isinstance(body, dict):
-            templates = body.get("tickettemplates") or body.get("ticket_templates") or body.get("data") or []
+            templates = (
+                body.get("tickettemplates")
+                or body.get("ticket_templates")
+                or body.get("data")
+                or []
+            )
             if isinstance(templates, list):
                 return [item for item in templates if isinstance(item, dict)]
         if isinstance(body, list):
@@ -499,7 +518,9 @@ class WorkOrderClient:
             },
         )
 
-    def fetch_ticket_sample_since(self, sample_size: int, since: str, seed: int | None = None) -> list[dict]:
+    def fetch_ticket_sample_since(
+        self, sample_size: int, since: str, seed: int | None = None
+    ) -> list[dict]:
         """从指定日期之后的工单中抽样。
 
         工单列表数量较大时不直接全量拉取，而是先估算 2025 年之后大致从哪一页开始，
@@ -535,7 +556,11 @@ class WorkOrderClient:
             if page in seen_pages:
                 continue
             seen_pages.add(page)
-            page_items = [item for item in _extract_items(self._ticket_page(path, page)) if _record_is_since(item, since)]
+            page_items = [
+                item
+                for item in _extract_items(self._ticket_page(path, page))
+                if _record_is_since(item, since)
+            ]
             rng.shuffle(page_items)
             for item in page_items[:1]:
                 ticket_id = str(item.get("ticketId") or item)
@@ -568,7 +593,11 @@ class WorkOrderClient:
             # 页数很少，直接精确计数
             count = 0
             for page in range(first_page, total_pages + 1):
-                count += sum(1 for item in _extract_items(self._ticket_page(path, page)) if _record_is_since(item, since))
+                count += sum(
+                    1
+                    for item in _extract_items(self._ticket_page(path, page))
+                    if _record_is_since(item, since)
+                )
             return count
 
         # 采样前 3 页和末页，按比例估算
@@ -588,7 +617,9 @@ class WorkOrderClient:
         estimated_ratio = since_matched / total_checked
         return int(estimated_ratio * total_pages * (total_checked / len(sample_pages)))
 
-    def _fetch_all_tickets_since(self, path: str, since: str, first_page: int, total_pages: int) -> list[dict]:
+    def _fetch_all_tickets_since(
+        self, path: str, since: str, first_page: int, total_pages: int
+    ) -> list[dict]:
         """顺序拉取 since 之后的所有工单（用于数量不足 sample_size 时全量返回）。"""
 
         results: list[dict] = []
@@ -678,7 +709,9 @@ class WorkOrderClient:
             if not page_items:
                 break
             items.extend(page_items)
-            if len(page_items) < self.settings.page_size or not _has_more(body, page, len(page_items)):
+            if len(page_items) < self.settings.page_size or not _has_more(
+                body, page, len(page_items)
+            ):
                 break
         return items
 
@@ -799,7 +832,9 @@ def _looks_successful(response: httpx.Response) -> bool:
         return False
     if "Invalid resource URI" in message:
         return False
-    return errcode in {"", "0", "200"} or any(key in body for key in ("data", "token", "access_token"))
+    return errcode in {"", "0", "200"} or any(
+        key in body for key in ("data", "token", "access_token")
+    )
 
 
 def _extract_items(body: Any) -> list[dict]:
@@ -850,7 +885,7 @@ def _declared_item_count(body: Any, fallback: int) -> int:
             value = data.get(key)
             if value not in (None, ""):
                 return int(value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
     return fallback
 
@@ -881,7 +916,9 @@ def _record_is_since(record: dict, since: str) -> bool:
 def _record_datetime(record: dict) -> datetime | None:
     """从记录中常见的创建时间字段解析 datetime。"""
 
-    return _parse_datetime(record.get("createDT") or record.get("createTime") or record.get("created_at"))
+    return _parse_datetime(
+        record.get("createDT") or record.get("createTime") or record.get("created_at")
+    )
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -892,7 +929,7 @@ def _parse_datetime(value: Any) -> datetime | None:
     text = str(value).strip().replace("/", "-")
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
         try:
-            return datetime.strptime(text[:19 if "%S" in fmt else 10], fmt)
+            return datetime.strptime(text[: 19 if "%S" in fmt else 10], fmt)
         except ValueError:
             continue
     return None

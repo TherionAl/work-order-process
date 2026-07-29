@@ -1,23 +1,18 @@
 import threading
 from typing import Any
 
-from work_order_process import mysql_storage
-from work_order_process.config import MySQLConfig
-from work_order_process.import_failures import FailureCollector
 from work_order_process.mysql_storage import (
     API_RAW_RECORD_DDL,
     API_SYNC_BATCH_DDL,
     CONTACT_HISTORY_DDL,
     CONTACTS_ALTER_STATEMENTS,
-    CUSTOMER_HISTORY_DDL,
     CUSTOMER_CONTACT_RELATION_HISTORY_DDL,
-    CUSTOMERS_ALTER_STATEMENTS,
+    CUSTOMER_HISTORY_DDL,
     CUSTOMER_SERVICE_VIEW_SQL,
+    CUSTOMERS_ALTER_STATEMENTS,
     _commit_batch,
     _fetch_batch_details,
     build_ticket_detail_main_row,
-    import_month_tickets_serial,
-    import_month_tickets_to_mysql,
 )
 
 
@@ -47,7 +42,10 @@ def test_build_ticket_detail_main_row_uses_resolved_ticket_category() -> None:
 def test_customer_contact_analytics_schema_defines_history_batch_and_columns() -> None:
     assert "CREATE TABLE IF NOT EXISTS customer_history" in CUSTOMER_HISTORY_DDL
     assert "CREATE TABLE IF NOT EXISTS contact_history" in CONTACT_HISTORY_DDL
-    assert "CREATE TABLE IF NOT EXISTS customer_contact_relation_history" in CUSTOMER_CONTACT_RELATION_HISTORY_DDL
+    assert (
+        "CREATE TABLE IF NOT EXISTS customer_contact_relation_history"
+        in CUSTOMER_CONTACT_RELATION_HISTORY_DDL
+    )
     assert "CREATE TABLE IF NOT EXISTS api_sync_batch" in API_SYNC_BATCH_DDL
     assert "CREATE TABLE IF NOT EXISTS api_raw_record" in API_RAW_RECORD_DDL
     assert any("ADD COLUMN `row_hash`" in statement for statement in CUSTOMERS_ALTER_STATEMENTS)
@@ -92,7 +90,7 @@ class RowFailingCursor:
     def __init__(self, ticket_id: str) -> None:
         self.ticket_id = ticket_id
 
-    def __enter__(self) -> "RowFailingCursor":
+    def __enter__(self) -> RowFailingCursor:
         return self
 
     def __exit__(self, *args: object) -> None:

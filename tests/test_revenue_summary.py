@@ -7,9 +7,9 @@ from openpyxl import Workbook, load_workbook
 
 from work_order_process import revenue_summary
 from work_order_process.revenue_summary import (
+    _METRIC_SQL,
     ENGLISH_HEADERS,
     PERSISTED_COLUMNS,
-    _METRIC_SQL,
     build_revenue_rows,
     export_revenue_workbook,
     fetch_revenue_metrics,
@@ -106,7 +106,9 @@ def test_export_revenue_workbook_writes_english_chinese_and_total_rows(tmp_path:
 
     workbook = load_workbook(path, data_only=False)
     sheet = workbook.active
-    assert [sheet.cell(1, column).value for column in range(2, len(ENGLISH_HEADERS) + 2)] == list(ENGLISH_HEADERS)
+    assert [sheet.cell(1, column).value for column in range(2, len(ENGLISH_HEADERS) + 2)] == list(
+        ENGLISH_HEADERS
+    )
     assert sheet.cell(2, 2).value == "统计年"
     assert sheet.cell(3, 2).value == "合计"
     assert sheet.cell(4, 4).value == "厦门分公司"
@@ -157,7 +159,12 @@ def test_fetch_revenue_metrics_uses_confirmed_filters_and_adjusted_amortization(
     statement, parameters = cursor.executed[0]
     assert "other_business_type = '非税票据'" in statement
     assert "is_estimated_ops = '否'" not in statement.split("AS recognized_revenue,")[0]
-    assert "is_estimated_ops = '否'" in statement.split("AS recognized_revenue,")[1].split("AS recognized_revenue_excluding_estimate,")[0]
+    assert (
+        "is_estimated_ops = '否'"
+        in statement.split("AS recognized_revenue,")[1].split(
+            "AS recognized_revenue_excluding_estimate,"
+        )[0]
+    )
     assert "cur_year_adjusted_amort" in statement
     assert "prev_year_adjusted_amort" in statement
     assert parameters[-1] == "20260717"
@@ -183,17 +190,13 @@ def test_replace_revenue_rows_deletes_month_before_inserting_platforms() -> None
     )
 
     delete_statement, delete_parameters = cursor.executed[0]
-    assert delete_statement.startswith(
-        "DELETE FROM ops_service_revenue_monthly"
-    )
+    assert delete_statement.startswith("DELETE FROM ops_service_revenue_monthly")
     assert delete_parameters == (2026, 6)
     statement, parameters = cursor.executed[1]
     assert "INSERT INTO ops_service_revenue_monthly" in statement
     assert "ON DUPLICATE KEY UPDATE" in statement
     assert parameters[0:3] == (2026, 6, "厦门分公司")
-    assert cursor.executed[2][0].startswith(
-        "SELECT COUNT(*) FROM ops_service_revenue_monthly"
-    )
+    assert cursor.executed[2][0].startswith("SELECT COUNT(*) FROM ops_service_revenue_monthly")
 
 
 def test_replace_revenue_rows_rejects_published_row_count_mismatch() -> None:
@@ -234,7 +237,9 @@ def test_empty_revenue_metrics_are_rejected_before_zero_rows_are_built() -> None
         revenue_summary.require_revenue_metrics({}, "20260717")
 
 
-def test_cli_generates_revenue_summary_with_explicit_period_and_snapshot(monkeypatch, tmp_path: Path) -> None:
+def test_cli_generates_revenue_summary_with_explicit_period_and_snapshot(
+    monkeypatch, tmp_path: Path
+) -> None:
     from work_order_process import cli
 
     captured: dict[str, object] = {}
@@ -257,7 +262,9 @@ def test_cli_generates_revenue_summary_with_explicit_period_and_snapshot(monkeyp
     monkeypatch.setattr(
         cli,
         "load_settings",
-        lambda: SimpleNamespace(mysql="mysql-config", output_dir=tmp_path, dictionary_path=tmp_path / "dictionary.pdf"),
+        lambda: SimpleNamespace(
+            mysql="mysql-config", output_dir=tmp_path, dictionary_path=tmp_path / "dictionary.pdf"
+        ),
     )
     monkeypatch.setattr(cli, "assert_schema_current", lambda _: None)
     monkeypatch.setattr(cli.DataDictionary, "from_pdf", lambda _: object())
@@ -286,7 +293,9 @@ def test_cli_generates_revenue_summary_with_explicit_period_and_snapshot(monkeyp
     assert captured["erp_create_date"] == "20260717"
 
 
-def test_cli_preview_exports_revenue_summary_without_persisting(monkeypatch, tmp_path: Path) -> None:
+def test_cli_preview_exports_revenue_summary_without_persisting(
+    monkeypatch, tmp_path: Path
+) -> None:
     from work_order_process import cli
 
     captured: dict[str, object] = {}
@@ -309,7 +318,9 @@ def test_cli_preview_exports_revenue_summary_without_persisting(monkeypatch, tmp
     monkeypatch.setattr(
         cli,
         "load_settings",
-        lambda: SimpleNamespace(mysql="mysql-config", output_dir=tmp_path, dictionary_path=tmp_path / "dictionary.pdf"),
+        lambda: SimpleNamespace(
+            mysql="mysql-config", output_dir=tmp_path, dictionary_path=tmp_path / "dictionary.pdf"
+        ),
     )
     monkeypatch.setattr(cli, "assert_schema_current", lambda _: None)
     monkeypatch.setattr(cli.DataDictionary, "from_pdf", lambda _: object())
@@ -336,17 +347,25 @@ def test_cli_preview_exports_revenue_summary_without_persisting(monkeypatch, tmp
 
 
 def test_revenue_schema_places_erp_snapshot_before_audit_columns_and_rounds_amounts() -> None:
-    schema = (Path(__file__).resolve().parents[1] / "sql" / "ops_service_revenue_monthly.sql").read_text(encoding="utf-8")
+    schema = (
+        Path(__file__).resolve().parents[1] / "sql" / "ops_service_revenue_monthly.sql"
+    ).read_text(encoding="utf-8")
 
     assert PERSISTED_COLUMNS[-1] == "erp_create_date"
-    assert schema.index("signing_yoy_rate") < schema.index("erp_create_date") < schema.index("created_at")
+    assert (
+        schema.index("signing_yoy_rate")
+        < schema.index("erp_create_date")
+        < schema.index("created_at")
+    )
     assert "DECIMAL(18,0)" in schema
     assert "ROUND(SUM(CASE" in _METRIC_SQL
     assert "END), 0) AS recognized_revenue" in _METRIC_SQL
 
 
 def test_revenue_total_view_has_dynamic_total_row_and_sort_order() -> None:
-    view_sql = (Path(__file__).resolve().parents[1] / "sql" / "v_ops_service_revenue_monthly_with_total.sql").read_text(encoding="utf-8")
+    view_sql = (
+        Path(__file__).resolve().parents[1] / "sql" / "v_ops_service_revenue_monthly_with_total.sql"
+    ).read_text(encoding="utf-8")
 
     assert "UNION ALL" in view_sql
     assert "'合计' AS sales_platform" in view_sql
@@ -354,7 +373,9 @@ def test_revenue_total_view_has_dynamic_total_row_and_sort_order() -> None:
     assert "ROUND(SUM(revenue_target), 0)" in view_sql
 
 
-def test_revenue_amounts_round_half_up_to_integer_and_export_without_decimals(tmp_path: Path) -> None:
+def test_revenue_amounts_round_half_up_to_integer_and_export_without_decimals(
+    tmp_path: Path,
+) -> None:
     rows = build_revenue_rows(
         year=2026,
         month=6,

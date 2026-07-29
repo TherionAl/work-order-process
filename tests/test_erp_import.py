@@ -4,8 +4,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 import pandas as pd
+import pytest
 from openpyxl import Workbook
 
 from work_order_process import erp_import
@@ -53,10 +53,7 @@ class FakeCursor:
             return None
         if "COUNT(DISTINCT create_date)" in self.last_statement:
             create_date_index = list(erp_import.IMPORT_COLUMNS).index("create_date")
-            create_dates = {
-                row[create_date_index]
-                for row in self.stage_rows
-            }
+            create_dates = {row[create_date_index] for row in self.stage_rows}
             value = next(iter(create_dates))
             return (len(create_dates), value, value)
         if "COUNT(*) FROM erp_data_import_stage" in self.last_statement:
@@ -249,7 +246,9 @@ def test_import_reordered_standard_sheet_maps_allocation_values_by_header(
 ) -> None:
     path = tmp_path / "standard.xlsx"
     headers = list(reversed(standard_headers()))
-    values_by_column = {column: f"text-{index}" for index, (_, column) in enumerate(STANDARD_ERP_COLUMN_MAP)}
+    values_by_column = {
+        column: f"text-{index}" for index, (_, column) in enumerate(STANDARD_ERP_COLUMN_MAP)
+    }
     for _, column in STANDARD_ERP_COLUMN_MAP:
         if erp_import.CONVERTERS.get(column) is erp_import._to_decimal:
             values_by_column[column] = "1.25"

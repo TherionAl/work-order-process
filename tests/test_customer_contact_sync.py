@@ -62,7 +62,9 @@ class FakeBulkStore(FakeStore):
 def test_customer_sync_uses_paged_bulk_writes_and_respects_limit() -> None:
     store = FakeBulkStore()
 
-    report = sync_customer_entities(None, PagedClient(), sources=["companies"], max_records=2, store=store)
+    report = sync_customer_entities(
+        None, PagedClient(), sources=["companies"], max_records=2, store=store
+    )
 
     assert report.status == "success"
     assert report.fetched == 2

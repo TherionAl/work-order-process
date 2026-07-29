@@ -97,9 +97,7 @@ def test_daily_runner_refuses_outdated_schema(monkeypatch) -> None:
     monkeypatch.setattr(
         daily_runner,
         "assert_schema_current",
-        lambda config: (_ for _ in ()).throw(
-            SchemaMigrationError("pending migration 2")
-        ),
+        lambda config: (_ for _ in ()).throw(SchemaMigrationError("pending migration 2")),
     )
 
     with pytest.raises(SchemaMigrationError, match="pending migration 2"):

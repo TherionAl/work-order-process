@@ -5,7 +5,6 @@ from pathlib import Path
 
 from work_order_process import daily_runner
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -15,25 +14,20 @@ def test_daily_runner_suppresses_httpx_request_logs() -> None:
 
 
 def test_systemd_unit_runs_as_dedicated_user_and_restarts() -> None:
-    text = (PROJECT_ROOT / "deploy" / "work-order-daily.service").read_text(
-        encoding="utf-8"
-    )
+    text = (PROJECT_ROOT / "deploy" / "work-order-daily.service").read_text(encoding="utf-8")
     assert "User=workorder" in text
     assert "Group=workorder" in text
     assert "Restart=on-failure" in text
     assert "EnvironmentFile=/etc/work-order-process/work-order.env" in text
     assert "WorkingDirectory=/opt/work_order_process" in text
     assert (
-        "ExecStart=/opt/work_order_process/.venv/bin/python "
-        "-m work_order_process.daily_runner"
+        "ExecStart=/opt/work_order_process/.venv/bin/python -m work_order_process.daily_runner"
     ) in text
     assert "NoNewPrivileges=true" in text
 
 
 def test_logrotate_limits_daily_runner_log_retention() -> None:
-    text = (PROJECT_ROOT / "deploy" / "work-order-daily.logrotate").read_text(
-        encoding="utf-8"
-    )
+    text = (PROJECT_ROOT / "deploy" / "work-order-daily.logrotate").read_text(encoding="utf-8")
     assert "/var/log/work-order-process/*.log" in text
     assert "daily" in text
     assert "rotate 14" in text
@@ -42,9 +36,7 @@ def test_logrotate_limits_daily_runner_log_retention() -> None:
 
 
 def test_mysql_backup_uses_protected_client_config_and_retention() -> None:
-    text = (PROJECT_ROOT / "scripts" / "backup_mysql.sh").read_text(
-        encoding="utf-8"
-    )
+    text = (PROJECT_ROOT / "scripts" / "backup_mysql.sh").read_text(encoding="utf-8")
     assert "--defaults-extra-file=/etc/work-order-process/mysql-backup.cnf" in text
     assert "/var/backups/work-order-process" in text
     assert "mysqldump" in text
@@ -55,12 +47,8 @@ def test_mysql_backup_uses_protected_client_config_and_retention() -> None:
 
 
 def test_mysql_backup_timer_is_persistent_and_daily() -> None:
-    service = (PROJECT_ROOT / "deploy" / "work-order-backup.service").read_text(
-        encoding="utf-8"
-    )
-    timer = (PROJECT_ROOT / "deploy" / "work-order-backup.timer").read_text(
-        encoding="utf-8"
-    )
+    service = (PROJECT_ROOT / "deploy" / "work-order-backup.service").read_text(encoding="utf-8")
+    timer = (PROJECT_ROOT / "deploy" / "work-order-backup.timer").read_text(encoding="utf-8")
     assert "Type=oneshot" in service
     assert "User=workorder" in service
     assert "Group=workorder" in service

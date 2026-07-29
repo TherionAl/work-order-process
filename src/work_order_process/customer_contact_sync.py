@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Iterable, Iterator
+from typing import Any
 
 from .config import MySQLConfig
 from .import_failures import FailureCollector
@@ -115,9 +116,18 @@ class MySQLCustomerContactStore:
                     INSERT INTO api_raw_record (sync_batch_id, entity_type, source_name, source_record_id, payload_json)
                     VALUES (%s, %s, %s, %s, %s)
                     """,
-                    (batch_id, entity_type, source_name, entity_id, json.dumps(raw_record, ensure_ascii=False, default=str)),
+                    (
+                        batch_id,
+                        entity_type,
+                        source_name,
+                        entity_id,
+                        json.dumps(raw_record, ensure_ascii=False, default=str),
+                    ),
                 )
-                cursor.execute(f"SELECT row_hash FROM {current_table} WHERE {entity_id_column} = %s", (entity_id,))
+                cursor.execute(
+                    f"SELECT row_hash FROM {current_table} WHERE {entity_id_column} = %s",
+                    (entity_id,),
+                )
                 current = cursor.fetchone()
                 if current and str(current[0] or "") == row_hash:
                     cursor.execute(
@@ -127,7 +137,10 @@ class MySQLCustomerContactStore:
                     self.connection.commit()
                     return "unchanged"
 
-                cursor.execute(f"SELECT COALESCE(MAX(version_no), 0) FROM {history_table} WHERE {entity_id_column} = %s", (entity_id,))
+                cursor.execute(
+                    f"SELECT COALESCE(MAX(version_no), 0) FROM {history_table} WHERE {entity_id_column} = %s",
+                    (entity_id,),
+                )
                 version_no = int(cursor.fetchone()[0]) + 1
                 if current:
                     cursor.execute(
@@ -143,7 +156,9 @@ class MySQLCustomerContactStore:
                         )
 
                 self._upsert_current(cursor, current_table, entity_id_column, row, batch_id)
-                self._insert_history(cursor, history_table, entity_id_column, row, batch_id, version_no, now)
+                self._insert_history(
+                    cursor, history_table, entity_id_column, row, batch_id, version_no, now
+                )
                 if entity_type == "contact":
                     cursor.execute(
                         """
@@ -151,7 +166,14 @@ class MySQLCustomerContactStore:
                         (contact_id, version_no, customer_id, customer_name, sync_batch_id, effective_from, is_current)
                         VALUES (%s, %s, %s, %s, %s, %s, 1)
                         """,
-                        (entity_id, version_no, row.get("customer_id"), row.get("customer_name"), batch_id, now),
+                        (
+                            entity_id,
+                            version_no,
+                            row.get("customer_id"),
+                            row.get("customer_name"),
+                            batch_id,
+                            now,
+                        ),
                     )
             self.connection.commit()
             return "changed" if current else "inserted"
@@ -159,7 +181,9 @@ class MySQLCustomerContactStore:
             self.connection.rollback()
             raise
 
-    def save_entities(self, *, entity_type: str, records: list[dict[str, Any]], batch_id: str) -> dict[str, int]:
+    def save_entities(
+        self, *, entity_type: str, records: list[dict[str, Any]], batch_id: str
+    ) -> dict[str, int]:
         """Write one page-sized batch with a bounded number of database round trips."""
 
         if not records:
@@ -172,7 +196,10 @@ class MySQLCustomerContactStore:
         now = datetime.now()
         try:
             with self.connection.cursor() as cursor:
-                cursor.execute(f"SELECT {id_column}, row_hash FROM {current_table} WHERE {id_column} IN ({placeholders})", ids)
+                cursor.execute(
+                    f"SELECT {id_column}, row_hash FROM {current_table} WHERE {id_column} IN ({placeholders})",
+                    ids,
+                )
                 current_hashes = {str(row[0]): str(row[1] or "") for row in cursor.fetchall()}
                 cursor.execute(
                     f"SELECT {id_column}, COALESCE(MAX(version_no), 0) FROM {history_table} "
@@ -186,11 +213,21 @@ class MySQLCustomerContactStore:
                     VALUES (%s, %s, %s, %s, %s)
                     """,
                     [
-                        (batch_id, entity_type, item["source_name"], str(item["row"][id_column]), json.dumps(item["raw_record"], ensure_ascii=False, default=str))
+                        (
+                            batch_id,
+                            entity_type,
+                            item["source_name"],
+                            str(item["row"][id_column]),
+                            json.dumps(item["raw_record"], ensure_ascii=False, default=str),
+                        )
                         for item in records
                     ],
                 )
-                unchanged = [item for item in records if current_hashes.get(str(item["row"][id_column])) == item["row"]["row_hash"]]
+                unchanged = [
+                    item
+                    for item in records
+                    if current_hashes.get(str(item["row"][id_column])) == item["row"]["row_hash"]
+                ]
                 active = [item for item in records if item not in unchanged]
                 if unchanged:
                     cursor.executemany(
@@ -201,13 +238,24 @@ class MySQLCustomerContactStore:
                     columns = list(active[0]["row"])
                     column_sql = ", ".join(f"`{column}`" for column in columns)
                     value_sql = ", ".join(["%s"] * (len(columns) + 1))
-                    updates = ", ".join(f"`{column}` = VALUES(`{column}`)" for column in columns if column != id_column)
+                    updates = ", ".join(
+                        f"`{column}` = VALUES(`{column}`)"
+                        for column in columns
+                        if column != id_column
+                    )
                     cursor.executemany(
                         f"INSERT INTO {current_table} ({column_sql}, `sync_batch_id`) VALUES ({value_sql}) "
                         f"ON DUPLICATE KEY UPDATE {updates}, last_sync_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP",
-                        [[item["row"][column] for column in columns] + [batch_id] for item in active],
+                        [
+                            [item["row"][column] for column in columns] + [batch_id]
+                            for item in active
+                        ],
                     )
-                    changed_ids = [str(item["row"][id_column]) for item in active if str(item["row"][id_column]) in current_hashes]
+                    changed_ids = [
+                        str(item["row"][id_column])
+                        for item in active
+                        if str(item["row"][id_column]) in current_hashes
+                    ]
                     if changed_ids:
                         cursor.executemany(
                             f"UPDATE {history_table} SET effective_to = %s, is_current = 0 WHERE {id_column} = %s AND is_current = 1",
@@ -253,7 +301,12 @@ class MySQLCustomerContactStore:
             self.connection.rollback()
             raise
         inserted = sum(1 for item in active if str(item["row"][id_column]) not in current_hashes)
-        return {"raw_saved": len(records), "inserted": inserted, "changed": len(active) - inserted, "unchanged": len(unchanged)}
+        return {
+            "raw_saved": len(records),
+            "inserted": inserted,
+            "changed": len(active) - inserted,
+            "unchanged": len(unchanged),
+        }
 
     @staticmethod
     def _upsert_current(
@@ -267,7 +320,9 @@ class MySQLCustomerContactStore:
         columns = list(payload)
         column_sql = ", ".join(f"`{column}`" for column in columns)
         placeholders = ", ".join(["%s"] * len(columns))
-        updates = ", ".join(f"`{column}` = VALUES(`{column}`)" for column in columns if column != id_column)
+        updates = ", ".join(
+            f"`{column}` = VALUES(`{column}`)" for column in columns if column != id_column
+        )
         cursor.execute(
             f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholders}) "
             f"ON DUPLICATE KEY UPDATE {updates}, last_sync_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP",
@@ -284,7 +339,12 @@ class MySQLCustomerContactStore:
         version_no: int,
         now: datetime,
     ) -> None:
-        payload = {**row, "version_no": version_no, "sync_batch_id": batch_id, "effective_from": now}
+        payload = {
+            **row,
+            "version_no": version_no,
+            "sync_batch_id": batch_id,
+            "effective_from": now,
+        }
         columns = list(payload)
         column_sql = ", ".join(f"`{column}`" for column in columns)
         placeholders = ", ".join(["%s"] * len(columns))
@@ -364,10 +424,14 @@ def _sync_entities(
                     fetched += 1
                     try:
                         row = _build_row(entity_type, record, source)
-                        entity_id = str(row["customer_id" if entity_type == "customer" else "contact_id"])
+                        entity_id = str(
+                            row["customer_id" if entity_type == "customer" else "contact_id"]
+                        )
                         if entity_id not in seen_ids:
                             seen_ids.add(entity_id)
-                            prepared.append({"row": row, "raw_record": record, "source_name": source})
+                            prepared.append(
+                                {"row": row, "raw_record": record, "source_name": source}
+                            )
                     except Exception as exc:
                         reports["failed"] += 1
                         failures.capture(
@@ -427,7 +491,9 @@ def _sync_entities(
             store.close()
 
 
-def _iter_source_pages(client: Any, entity_type: str, source: str) -> Iterator[list[dict[str, Any]]]:
+def _iter_source_pages(
+    client: Any, entity_type: str, source: str
+) -> Iterator[list[dict[str, Any]]]:
     methods = {
         ("customer", "companies"): ("iter_companies", "fetch_companies"),
         ("customer", "customers"): ("iter_companies", "fetch_customers"),
@@ -456,7 +522,9 @@ def _save_prepared_entities(
     for chunk in _chunks(prepared, WRITE_BATCH_SIZE):
         if hasattr(store, "save_entities"):
             try:
-                outcomes = store.save_entities(entity_type=entity_type, records=chunk, batch_id=batch_id)
+                outcomes = store.save_entities(
+                    entity_type=entity_type, records=chunk, batch_id=batch_id
+                )
                 for key in ("raw_saved", "inserted", "changed", "unchanged"):
                     reports[key] += int(outcomes.get(key, 0))
                 continue
@@ -480,7 +548,7 @@ def _save_prepared_entities(
 
 def _chunks(items: list[dict[str, Any]], size: int) -> Iterator[list[dict[str, Any]]]:
     for start in range(0, len(items), size):
-        yield items[start:start + size]
+        yield items[start : start + size]
 
 
 def _build_row(entity_type: str, record: dict[str, Any], source: str) -> dict[str, Any]:
@@ -503,9 +571,7 @@ def _finish_batch(
     if error_message is None and isinstance(failure_items, list) and failure_items:
         first_failure = failure_items[0]
         if isinstance(first_failure, dict):
-            safe_message = " ".join(
-                str(first_failure.get("safe_message") or "").splitlines()
-            )
+            safe_message = " ".join(str(first_failure.get("safe_message") or "").splitlines())
             error_message = (
                 f"{failure_payload.get('failure_count')} failure(s); "
                 f"{first_failure.get('stage')} {first_failure.get('error_type')}: "

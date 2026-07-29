@@ -5,16 +5,16 @@ from __future__ import annotations
 import hashlib
 import pkgutil
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import pymysql
 
-from .config import MySQLConfig
 from . import migrations as migrations_package
-
+from .config import MySQLConfig
 
 SCHEMA_VERSION_DDL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -83,9 +83,7 @@ def discover_migrations() -> tuple[Migration, ...]:
 
     versions = [migration.version for migration in migrations]
     if versions != sorted(versions) or len(versions) != len(set(versions)):
-        raise SchemaMigrationError(
-            "Migration versions must be unique and strictly increasing."
-        )
+        raise SchemaMigrationError("Migration versions must be unique and strictly increasing.")
     return tuple(migrations)
 
 
@@ -95,19 +93,14 @@ def inspect_schema_status(
 ) -> SchemaStatus:
     """Compare recorded migration metadata with discovered migrations."""
 
-    cursor.execute(
-        "SELECT version, name, checksum FROM schema_version ORDER BY version"
-    )
+    cursor.execute("SELECT version, name, checksum FROM schema_version ORDER BY version")
     applied = {
-        int(version): (str(name), str(checksum))
-        for version, name, checksum in cursor.fetchall()
+        int(version): (str(name), str(checksum)) for version, name, checksum in cursor.fetchall()
     }
     known = {migration.version: migration for migration in migrations}
     unknown = sorted(set(applied) - set(known))
     if unknown:
-        raise SchemaMigrationError(
-            f"Unknown applied migration versions: {unknown}."
-        )
+        raise SchemaMigrationError(f"Unknown applied migration versions: {unknown}.")
 
     drifted = []
     for version, (name, checksum) in applied.items():
@@ -116,14 +109,11 @@ def inspect_schema_status(
             drifted.append(version)
     if drifted:
         raise SchemaMigrationError(
-            "Applied migration checksum or name drift detected for versions "
-            f"{drifted}."
+            f"Applied migration checksum or name drift detected for versions {drifted}."
         )
 
     pending = tuple(
-        migration.version
-        for migration in migrations
-        if migration.version not in applied
+        migration.version for migration in migrations if migration.version not in applied
     )
     return SchemaStatus(
         current_version=max(applied, default=0),
@@ -157,12 +147,9 @@ def apply_pending_migrations(
                 if not migration.is_satisfied(cursor, database):
                     migration.apply(cursor, database)
                     if not migration.is_satisfied(cursor, database):
-                        raise RuntimeError(
-                            "schema is not satisfied after apply"
-                        )
+                        raise RuntimeError("schema is not satisfied after apply")
                 cursor.execute(
-                    "INSERT INTO schema_version (version, name, checksum) "
-                    "VALUES (%s, %s, %s)",
+                    "INSERT INTO schema_version (version, name, checksum) VALUES (%s, %s, %s)",
                     (migration.version, migration.name, migration.checksum),
                 )
                 connection.commit()
@@ -248,15 +235,11 @@ def record_satisfied_migrations(
         status = inspect_schema_status(cursor, migrations)
         pending = set(status.pending_versions)
         for migration in migrations:
-            if (
-                migration.version not in pending
-                or not migration.is_satisfied(cursor, database)
-            ):
+            if migration.version not in pending or not migration.is_satisfied(cursor, database):
                 continue
             try:
                 cursor.execute(
-                    "INSERT INTO schema_version (version, name, checksum) "
-                    "VALUES (%s, %s, %s)",
+                    "INSERT INTO schema_version (version, name, checksum) VALUES (%s, %s, %s)",
                     (migration.version, migration.name, migration.checksum),
                 )
                 connection.commit()

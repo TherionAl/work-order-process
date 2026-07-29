@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .business_time import WorkCalendar, business_minutes_between
-from .config import MySQLConfig, PROJECT_ROOT
+from .config import PROJECT_ROOT, MySQLConfig
 from .io import write_json
-
 
 DEFAULT_METRICS_CONFIG = PROJECT_ROOT / "config" / "time_metrics.json"
 DEFAULT_CALENDAR_PATH = PROJECT_ROOT / "config" / "work_calendar_cn_2026.json"
@@ -28,7 +28,9 @@ class TimeMetricDefinition:
     enabled: bool = True
 
 
-def load_metric_definitions(path: Path, metric_code: str | None = None) -> list[TimeMetricDefinition]:
+def load_metric_definitions(
+    path: Path, metric_code: str | None = None
+) -> list[TimeMetricDefinition]:
     data = json.loads(path.read_text(encoding="utf-8"))
     raw_metrics = data.get("metrics")
     if not isinstance(raw_metrics, list):
@@ -71,7 +73,9 @@ def export_month_time_metrics(
     calendar = WorkCalendar.from_json(calendar_path)
     metrics = load_metric_definitions(metrics_config_path, metric_code)
     tickets = _fetch_month_tickets(mysql, month_label, limit)
-    field_values = _fetch_metric_field_values(mysql, month_label, [ticket["ticket_id"] for ticket in tickets], metrics)
+    field_values = _fetch_metric_field_values(
+        mysql, month_label, [ticket["ticket_id"] for ticket in tickets], metrics
+    )
 
     rows = [
         _compute_metric_row(ticket, metric, field_values.get(ticket["ticket_id"], {}), calendar)
@@ -87,7 +91,10 @@ def export_month_time_metrics(
         "result_count": len(rows),
         "metrics_config": str(metrics_config_path),
         "calendar": str(calendar_path),
-        "work_sessions": [f"{start.isoformat(timespec='minutes')}-{end.isoformat(timespec='minutes')}" for start, end in calendar.work_sessions],
+        "work_sessions": [
+            f"{start.isoformat(timespec='minutes')}-{end.isoformat(timespec='minutes')}"
+            for start, end in calendar.work_sessions
+        ],
         "summary": {
             "status_counts": dict(sorted(status_counts.items())),
         },
@@ -114,8 +121,13 @@ def export_ticket_time_metrics(
     ticket = _fetch_ticket(mysql, ticket_id)
     if ticket is None:
         raise ValueError(f"Ticket not found in MySQL: {ticket_id}")
-    field_values = _fetch_metric_field_values(mysql, ticket["create_month_label"], [ticket["ticket_id"]], metrics)
-    rows = [_compute_metric_row(ticket, metric, field_values.get(ticket["ticket_id"], {}), calendar) for metric in metrics]
+    field_values = _fetch_metric_field_values(
+        mysql, ticket["create_month_label"], [ticket["ticket_id"]], metrics
+    )
+    rows = [
+        _compute_metric_row(ticket, metric, field_values.get(ticket["ticket_id"], {}), calendar)
+        for metric in metrics
+    ]
     status_counts = Counter(row["status"] for row in rows)
     report = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -125,7 +137,10 @@ def export_ticket_time_metrics(
         "result_count": len(rows),
         "metrics_config": str(metrics_config_path),
         "calendar": str(calendar_path),
-        "work_sessions": [f"{start.isoformat(timespec='minutes')}-{end.isoformat(timespec='minutes')}" for start, end in calendar.work_sessions],
+        "work_sessions": [
+            f"{start.isoformat(timespec='minutes')}-{end.isoformat(timespec='minutes')}"
+            for start, end in calendar.work_sessions
+        ],
         "summary": {
             "status_counts": dict(sorted(status_counts.items())),
         },
@@ -164,20 +179,40 @@ def _compute_metric_row(
         "error_message": None,
     }
     if not start_text and not end_text:
-        return {**base, "status": "missing_both", "error_message": "start and end field values are empty"}
+        return {
+            **base,
+            "status": "missing_both",
+            "error_message": "start and end field values are empty",
+        }
     if not start_text:
-        return {**base, "status": "missing_start", "error_message": f"{metric.start_field} is empty"}
+        return {
+            **base,
+            "status": "missing_start",
+            "error_message": f"{metric.start_field} is empty",
+        }
     if not end_text:
         return {**base, "status": "missing_end", "error_message": f"{metric.end_field} is empty"}
 
     start = _parse_datetime(start_text)
     end = _parse_datetime(end_text)
     if start is None:
-        return {**base, "status": "invalid_start", "error_message": f"cannot parse {metric.start_field}: {start_text}"}
+        return {
+            **base,
+            "status": "invalid_start",
+            "error_message": f"cannot parse {metric.start_field}: {start_text}",
+        }
     if end is None:
-        return {**base, "status": "invalid_end", "error_message": f"cannot parse {metric.end_field}: {end_text}"}
+        return {
+            **base,
+            "status": "invalid_end",
+            "error_message": f"cannot parse {metric.end_field}: {end_text}",
+        }
     if end < start:
-        return {**base, "status": "invalid_time_order", "error_message": "end time is earlier than start time"}
+        return {
+            **base,
+            "status": "invalid_time_order",
+            "error_message": "end time is earlier than start time",
+        }
 
     raw_minutes = int((end - start).total_seconds() // 60)
     business_minutes = business_minutes_between(start, end, calendar)
@@ -190,7 +225,9 @@ def _compute_metric_row(
     }
 
 
-def _fetch_month_tickets(mysql: MySQLConfig, month_label: str, limit: int | None) -> list[dict[str, Any]]:
+def _fetch_month_tickets(
+    mysql: MySQLConfig, month_label: str, limit: int | None
+) -> list[dict[str, Any]]:
     pymysql = _pymysql()
     sql = (
         "SELECT ticket_id, create_dt, create_month_label, ticket_template_id, subject, source_updated_at "
@@ -225,7 +262,9 @@ def _fetch_metric_field_values(
     ticket_ids: list[int],
     metrics: Iterable[TimeMetricDefinition],
 ) -> dict[int, dict[str, str | None]]:
-    field_keys = sorted({metric.start_field for metric in metrics} | {metric.end_field for metric in metrics})
+    field_keys = sorted(
+        {metric.start_field for metric in metrics} | {metric.end_field for metric in metrics}
+    )
     if not ticket_ids or not field_keys:
         return {}
 
@@ -234,7 +273,7 @@ def _fetch_metric_field_values(
     with pymysql.connect(**_connect_kwargs(mysql)) as connection:
         with connection.cursor() as cursor:
             for start in range(0, len(ticket_ids), 1000):
-                chunk = ticket_ids[start:start + 1000]
+                chunk = ticket_ids[start : start + 1000]
                 ticket_placeholders = ", ".join(["%s"] * len(chunk))
                 field_placeholders = ", ".join(["%s"] * len(field_keys))
                 cursor.execute(
@@ -268,7 +307,7 @@ def _parse_datetime(value: str | None) -> datetime | None:
     text = str(value).strip().replace("/", "-")
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
-            return datetime.strptime(text[:len(datetime.now().strftime(fmt))], fmt)
+            return datetime.strptime(text[: len(datetime.now().strftime(fmt))], fmt)
         except ValueError:
             continue
     try:

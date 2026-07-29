@@ -8,12 +8,13 @@
 
 from __future__ import annotations
 
+import json
+import random
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
-import json
 from pathlib import Path
-import random
-from typing import Any, Iterable
+from typing import Any
 
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
@@ -21,7 +22,6 @@ from .api import ApiError, WorkOrderClient
 from .dictionary import DataDictionary
 from .io import write_json
 from .resolver import TicketFieldResolver, resolve_ticket_detail_values
-
 
 MONTHLY_TICKET_DIR_TEMPLATE = "{year}_monthly_tickets"
 MONTHLY_SAMPLE_DETAIL_DIR_TEMPLATE = "{year}_monthly_sample_details"
@@ -54,12 +54,16 @@ def export_year_monthly_tickets_and_samples(
 
     monthly_ticket_dir = output_dir / MONTHLY_TICKET_DIR_TEMPLATE.format(year=year)
     monthly_sample_detail_dir = output_dir / MONTHLY_SAMPLE_DETAIL_DIR_TEMPLATE.format(year=year)
-    field_resolver = TicketFieldResolver(client.fetch_ticket_fields(), client.fetch_company_fields())
+    field_resolver = TicketFieldResolver(
+        client.fetch_ticket_fields(), client.fetch_company_fields()
+    )
 
     month_numbers = list(months) if months is not None else list(range(1, 13))
     month_reports: list[dict[str, Any]] = []
     with _progress_context(show_progress) as progress:
-        task_id = progress.add_task("导出月份和样本详情", total=len(month_numbers)) if progress else None
+        task_id = (
+            progress.add_task("导出月份和样本详情", total=len(month_numbers)) if progress else None
+        )
         for month in month_numbers:
             month_label = build_month_label(year, month)
             if progress and task_id is not None:
@@ -73,7 +77,9 @@ def export_year_monthly_tickets_and_samples(
                 limit_per_month=limit_per_month,
                 overwrite=overwrite,
             )
-            sample_rows = _sample_ticket_rows(ticket_report["tickets"], sample_size, seed, month_label)
+            sample_rows = _sample_ticket_rows(
+                ticket_report["tickets"], sample_size, seed, month_label
+            )
             detail_report = _export_month_sample_details(
                 monthly_sample_detail_dir,
                 month_label,
@@ -127,7 +133,9 @@ def export_year_monthly_tickets(
     month_numbers = list(months) if months is not None else list(range(1, 13))
     month_reports: list[dict[str, Any]] = []
     with _progress_context(show_progress) as progress:
-        task_id = progress.add_task("导出月度工单合集", total=len(month_numbers)) if progress else None
+        task_id = (
+            progress.add_task("导出月度工单合集", total=len(month_numbers)) if progress else None
+        )
         for month in month_numbers:
             month_label = build_month_label(year, month)
             if progress and task_id is not None:
@@ -186,13 +194,17 @@ def export_month_template_samples(
     if not templates:
         raise ApiError("No ticket templates returned from /tickettemplates.")
 
-    output_detail_dir = output_dir / TEMPLATE_SAMPLE_DETAIL_DIR_TEMPLATE.format(year=year, month=month)
+    output_detail_dir = output_dir / TEMPLATE_SAMPLE_DETAIL_DIR_TEMPLATE.format(
+        year=year, month=month
+    )
     raw_path = output_detail_dir / f"{month_label}_template_sample_details_raw.json"
     value_path = output_detail_dir / f"{month_label}_template_sample_details_value_resolved.json"
     chinese_path = output_detail_dir / f"{month_label}_template_sample_details_chinese.json"
     existing = [path for path in (raw_path, value_path, chinese_path) if path.exists()]
     if existing and not overwrite:
-        raise ApiError(f"Template sample detail output already exists for {month_label}. Use --overwrite to regenerate it.")
+        raise ApiError(
+            f"Template sample detail output already exists for {month_label}. Use --overwrite to regenerate it."
+        )
 
     template_reports: list[dict[str, Any]] = []
     sampled_rows: list[dict[str, Any]] = []
@@ -200,7 +212,9 @@ def export_month_template_samples(
         template_id = str(template.get("tId") or template.get("id") or "").strip()
         if not template_id:
             continue
-        template_name = str(template.get("ticketTemplateName") or template.get("name") or template_id)
+        template_name = str(
+            template.get("ticketTemplateName") or template.get("name") or template_id
+        )
         count = _count_month_template_tickets(client, month_label, template_id)
         if count == 0:
             continue
@@ -223,14 +237,20 @@ def export_month_template_samples(
             }
         )
 
-    field_resolver = TicketFieldResolver(client.fetch_ticket_fields(), client.fetch_company_fields())
+    field_resolver = TicketFieldResolver(
+        client.fetch_ticket_fields(), client.fetch_company_fields()
+    )
     raw_details: list[dict[str, Any]] = []
     value_details: list[dict[str, Any]] = []
     chinese_details: list[dict[str, Any]] = []
     failed_ids: list[str] = []
 
     with _progress_context(show_progress) as progress:
-        task_id = progress.add_task(f"获取 {month_label} 模板样本详情", total=len(sampled_rows)) if progress else None
+        task_id = (
+            progress.add_task(f"获取 {month_label} 模板样本详情", total=len(sampled_rows))
+            if progress
+            else None
+        )
         for ticket_id, raw_detail in _fetch_sample_raw_details(
             sampled_rows,
             client,
@@ -274,10 +294,14 @@ def build_month_label(year: int, month: int) -> str:
     return f"{year}-{month:02d}"
 
 
-def _count_month_template_tickets(client: WorkOrderClient, month_label: str, template_id: str) -> int:
+def _count_month_template_tickets(
+    client: WorkOrderClient, month_label: str, template_id: str
+) -> int:
     """统计某个月某个模板的工单数量。"""
 
-    tickets = client.search_tickets_by_create_month_and_template(month_label, template_id, page=1, per_page=1)
+    tickets = client.search_tickets_by_create_month_and_template(
+        month_label, template_id, page=1, per_page=1
+    )
     return _safe_int(tickets.get("count"))
 
 
@@ -367,13 +391,17 @@ def _load_or_fetch_month_tickets(
     if output_path.exists() and not overwrite:
         data = _load_json_object(output_path)
         if _is_partial_report(data) and limit_per_month is None:
-            report = fetch_month_ticket_rows(client, year, month, per_page=per_page, limit_per_month=None)
+            report = fetch_month_ticket_rows(
+                client, year, month, per_page=per_page, limit_per_month=None
+            )
             report["_regenerated"] = True
             write_json(output_path, report)
             return report
         return _slice_month_report(data, limit_per_month)
 
-    report = fetch_month_ticket_rows(client, year, month, per_page=per_page, limit_per_month=limit_per_month)
+    report = fetch_month_ticket_rows(
+        client, year, month, per_page=per_page, limit_per_month=limit_per_month
+    )
     write_json(output_path, report)
     return report
 
@@ -396,7 +424,9 @@ def _export_month_sample_details(
     existing = [path for path in (raw_path, value_path, chinese_path) if path.exists()]
     if len(existing) == 3 and not overwrite:
         return {
-            "sample_ticket_ids": [str(row.get("ticketId")) for row in sample_rows if row.get("ticketId")],
+            "sample_ticket_ids": [
+                str(row.get("ticketId")) for row in sample_rows if row.get("ticketId")
+            ],
             "detail_count": _json_array_len(raw_path),
             "failed_count": 0,
             "failed_ids": [],
@@ -405,14 +435,18 @@ def _export_month_sample_details(
             "chinese_output": str(chinese_path),
         }
     if existing and not overwrite:
-        raise ApiError(f"Incomplete sample detail output exists for {month_label}. Use --overwrite to regenerate it.")
+        raise ApiError(
+            f"Incomplete sample detail output exists for {month_label}. Use --overwrite to regenerate it."
+        )
 
     raw_details: list[dict[str, Any]] = []
     value_details: list[dict[str, Any]] = []
     chinese_details: list[dict[str, Any]] = []
     failed_ids: list[str] = []
 
-    for ticket_id, raw_detail in _fetch_sample_raw_details(sample_rows, client, detail_workers=detail_workers):
+    for ticket_id, raw_detail in _fetch_sample_raw_details(
+        sample_rows, client, detail_workers=detail_workers
+    ):
         if not raw_detail:
             failed_ids.append(ticket_id)
             continue
@@ -425,7 +459,9 @@ def _export_month_sample_details(
     write_json(value_path, value_details)
     write_json(chinese_path, chinese_details)
     return {
-        "sample_ticket_ids": [str(row.get("ticketId")) for row in sample_rows if row.get("ticketId")],
+        "sample_ticket_ids": [
+            str(row.get("ticketId")) for row in sample_rows if row.get("ticketId")
+        ],
         "detail_count": len(raw_details),
         "failed_count": len(failed_ids),
         "failed_ids": failed_ids,
@@ -444,7 +480,9 @@ def _fetch_sample_raw_details(
 ) -> list[tuple[str, dict[str, Any] | None]]:
     """并发读取样本工单原始详情，并保持原抽样顺序返回。"""
 
-    ticket_ids = [str(row.get("ticketId") or "").strip() for row in sample_rows if row.get("ticketId")]
+    ticket_ids = [
+        str(row.get("ticketId") or "").strip() for row in sample_rows if row.get("ticketId")
+    ]
     if not ticket_ids:
         return []
 
@@ -486,7 +524,9 @@ def _progress_context(show_progress: bool):
     )
 
 
-def _sample_ticket_rows(rows: list[dict[str, Any]], sample_size: int, seed: int, month_label: str) -> list[dict[str, Any]]:
+def _sample_ticket_rows(
+    rows: list[dict[str, Any]], sample_size: int, seed: int, month_label: str
+) -> list[dict[str, Any]]:
     """从月度工单合集里按固定种子抽样。"""
 
     if len(rows) <= sample_size:
@@ -498,7 +538,9 @@ def _sample_ticket_rows(rows: list[dict[str, Any]], sample_size: int, seed: int,
 def _month_ticket_path(output_dir: Path, year: int, month_label: str) -> Path:
     """生成某个月工单合集文件路径。"""
 
-    return output_dir / MONTHLY_TICKET_DIR_TEMPLATE.format(year=year) / f"{month_label}_tickets.json"
+    return (
+        output_dir / MONTHLY_TICKET_DIR_TEMPLATE.format(year=year) / f"{month_label}_tickets.json"
+    )
 
 
 def _load_json_object(path: Path) -> dict[str, Any]:
@@ -559,7 +601,7 @@ def _safe_int(value: Any) -> int:
 
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return 0
 
 

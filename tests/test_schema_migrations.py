@@ -9,6 +9,10 @@ import pytest
 
 from work_order_process import cli
 from work_order_process.config import MySQLConfig
+from work_order_process.migrations import (
+    v0001_current_schema,
+    v0002_erp_allocation_columns,
+)
 from work_order_process.schema_migrations import (
     Migration,
     SchemaMigrationError,
@@ -18,10 +22,6 @@ from work_order_process.schema_migrations import (
     inspect_schema_status,
     record_satisfied_migrations,
     schema_status,
-)
-from work_order_process.migrations import (
-    v0001_current_schema,
-    v0002_erp_allocation_columns,
 )
 
 
@@ -45,9 +45,7 @@ def test_discovered_migrations_are_sorted_and_unique() -> None:
 
 
 def test_applied_checksum_drift_is_rejected() -> None:
-    cursor = ScriptedMigrationCursor(
-        applied=[(1, "current_schema", "wrong-checksum")]
-    )
+    cursor = ScriptedMigrationCursor(applied=[(1, "current_schema", "wrong-checksum")])
 
     with pytest.raises(SchemaMigrationError, match="checksum"):
         inspect_schema_status(cursor, discover_migrations())
@@ -186,9 +184,7 @@ def test_rerun_reconciles_auto_committed_ddl_before_recording_version() -> None:
         migrations=(migration,),
     )
 
-    assert connection.ddl_statements == [
-        "ALTER TABLE example ADD COLUMN value INT"
-    ]
+    assert connection.ddl_statements == ["ALTER TABLE example ADD COLUMN value INT"]
     assert connection.recorded_versions == [1]
     assert status.is_current
 
@@ -212,9 +208,7 @@ class InformationSchemaCursor:
         elif "information_schema.columns" in statement.lower():
             assert isinstance(params, tuple)
             table = str(params[-1])
-            self.result = [
-                (column,) for column in sorted(self.columns.get(table, set()))
-            ]
+            self.result = [(column,) for column in sorted(self.columns.get(table, set()))]
         else:
             self.result = []
 
@@ -292,10 +286,7 @@ def test_v1_requires_key_write_column_from_every_baseline_table(
     )
     assert v0001_current_schema.is_satisfied(complete_cursor, "warehouse")
 
-    incomplete_columns = {
-        name: set(columns)
-        for name, columns in complete_columns.items()
-    }
+    incomplete_columns = {name: set(columns) for name, columns in complete_columns.items()}
     incomplete_columns[table].remove(missing_column)
     incomplete_cursor = InformationSchemaCursor(
         tables=set(incomplete_columns),
@@ -345,8 +336,7 @@ def test_current_schema_apply_executes_base_table_and_compatibility_ddl() -> Non
     statements = [statement for statement, _ in cursor.statements]
     assert sum("CREATE TABLE IF NOT EXISTS" in statement for statement in statements) == 10
     assert any(
-        "ALTER TABLE ticket_detail_main" in statement
-        and "ticket_category" in statement
+        "ALTER TABLE ticket_detail_main" in statement and "ticket_category" in statement
         for statement in statements
     )
     assert any(
@@ -362,9 +352,7 @@ def test_erp_migration_is_satisfied_when_optional_table_is_absent() -> None:
     v0002_erp_allocation_columns.apply(cursor, "warehouse")
 
     assert not [
-        statement
-        for statement, _ in cursor.statements
-        if statement.startswith("ALTER TABLE")
+        statement for statement, _ in cursor.statements if statement.startswith("ALTER TABLE")
     ]
 
 
@@ -561,10 +549,7 @@ def test_mysql_init_records_only_satisfied_baseline(monkeypatch) -> None:
     monkeypatch.setattr(
         cli,
         "record_satisfied_schema",
-        lambda config: (
-            calls.append(("record", config))
-            or _status(pending=(2,))
-        ),
+        lambda config: calls.append(("record", config)) or _status(pending=(2,)),
     )
     monkeypatch.setattr(cli, "get_existing_partitions", lambda config: {"pmax"})
     monkeypatch.setattr(

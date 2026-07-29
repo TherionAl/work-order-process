@@ -6,7 +6,6 @@ import pymysql
 
 from .config import MySQLConfig
 from .migrations.v0002_erp_allocation_columns import (
-    ERP_ALLOCATION_COLUMNS,
     apply,
     is_satisfied,
     missing_columns,

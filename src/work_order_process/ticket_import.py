@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .api import WorkOrderClient
 from .config import MySQLConfig
@@ -23,9 +24,9 @@ from .mysql_storage import (
 from .resolver import TicketFieldResolver, _split_id_list, resolve_ticket_detail_values
 from .sync_log import write_sync_log
 
-
 API_FAILURE_STAGE = "api"
 DATABASE_FAILURE_STAGE = "database"
+
 
 def _fetch_month_ticket_rows(
     client: WorkOrderClient,
@@ -114,7 +115,9 @@ def import_month_tickets_serial(
             "duration_seconds": 0,
         }
 
-    field_resolver = TicketFieldResolver(client.fetch_ticket_fields(), client.fetch_company_fields())
+    field_resolver = TicketFieldResolver(
+        client.fetch_ticket_fields(), client.fetch_company_fields()
+    )
 
     imported = 0
     updated = 0
@@ -164,31 +167,45 @@ def import_month_tickets_serial(
         total_custom += batch_result["custom_rows"]
 
     duration = int((datetime.now() - started_at).total_seconds())
-    overall_status = "success" if not failed_ids else ("partial" if (imported + updated) > 0 else "failed")
+    overall_status = (
+        "success" if not failed_ids else ("partial" if (imported + updated) > 0 else "failed")
+    )
     failure_payload = failures.as_payload()
     write_sync_log(
-        config, task_type="ticket_detail",
-        target_year=year, target_month=month, month_label=month_label,
-        status=overall_status, total_count=len(ticket_ids),
-        success_count=imported + updated, failed_count=len(failed_ids),
-        skipped_count=skipped, duration_seconds=duration,
+        config,
+        task_type="ticket_detail",
+        target_year=year,
+        target_month=month,
+        month_label=month_label,
+        status=overall_status,
+        total_count=len(ticket_ids),
+        success_count=imported + updated,
+        failed_count=len(failed_ids),
+        skipped_count=skipped,
+        duration_seconds=duration,
         error_message=None if overall_status == "success" else f"{len(failed_ids)} 条工单失败",
         extra_json={
             "failed_ids": failed_ids,
             "failures": failure_payload["failures"],
             "failures_truncated": failure_payload["failures_truncated"],
-        } if failed_ids else None,
+        }
+        if failed_ids
+        else None,
     )
 
     return {
         "month": month_label,
         "ticket_source": ticket_source,
         "total_in_month": len(ticket_ids),
-        "imported": imported, "updated": updated, "skipped": skipped,
-        "failed": len(failed_ids), "failed_ids": failed_ids,
+        "imported": imported,
+        "updated": updated,
+        "skipped": skipped,
+        "failed": len(failed_ids),
+        "failed_ids": failed_ids,
         "failures": failure_payload["failures"],
         "failures_truncated": failure_payload["failures_truncated"],
-        "custom_field_rows": total_custom, "duration_seconds": duration,
+        "custom_field_rows": total_custom,
+        "duration_seconds": duration,
     }
 
 
@@ -270,12 +287,12 @@ def import_month_tickets_to_mysql(
             "duration_seconds": 0,
         }
 
-    field_resolver = TicketFieldResolver(client.fetch_ticket_fields(), client.fetch_company_fields())
+    field_resolver = TicketFieldResolver(
+        client.fetch_ticket_fields(), client.fetch_company_fields()
+    )
     pending_ids = set(ticket_ids)
     pending_rows = [
-        row
-        for row in ticket_rows
-        if str(row.get("ticketId") or "").strip() in pending_ids
+        row for row in ticket_rows if str(row.get("ticketId") or "").strip() in pending_ids
     ]
 
     # ── 1. 预取实体详情（去重后并发请求）────────────────────────
@@ -292,7 +309,7 @@ def import_month_tickets_to_mysql(
     api_semaphore = threading.Semaphore(max(1, api_rate_limit))
 
     for batch_start in range(0, len(ticket_ids), batch_size):
-        batch = ticket_ids[batch_start:batch_start + batch_size]
+        batch = ticket_ids[batch_start : batch_start + batch_size]
         detail_map, api_failures = _fetch_batch_details(
             client,
             batch,
@@ -312,7 +329,9 @@ def import_month_tickets_to_mysql(
         total_custom += batch_result["custom_rows"]
 
     duration = int((datetime.now() - started_at).total_seconds())
-    overall_status = "success" if not failed_ids else ("partial" if (imported + updated) > 0 else "failed")
+    overall_status = (
+        "success" if not failed_ids else ("partial" if (imported + updated) > 0 else "failed")
+    )
     failure_payload = failures.as_payload()
     write_sync_log(
         config,
@@ -333,7 +352,9 @@ def import_month_tickets_to_mysql(
             "failures_truncated": failure_payload["failures_truncated"],
             "ticket_source": ticket_source,
             "limit_per_month": limit_per_month,
-        } if failed_ids else {
+        }
+        if failed_ids
+        else {
             "ticket_source": ticket_source,
             "limit_per_month": limit_per_month,
         },
@@ -425,7 +446,9 @@ def _filter_ticket_rows_for_import(
         ticket_id = str(row.get("ticketId") or "").strip()
         if not ticket_id:
             continue
-        candidates.append((ticket_id, _to_datetime(row.get("createDT")), _to_datetime(row.get("updateDT"))))
+        candidates.append(
+            (ticket_id, _to_datetime(row.get("createDT")), _to_datetime(row.get("updateDT")))
+        )
 
     if not candidates:
         return [], 0
@@ -444,7 +467,7 @@ def _filter_ticket_rows_for_import(
         with connection.cursor() as cursor:
             ids = [ticket_id for ticket_id, _create_dt, _update_dt in candidates]
             for start in range(0, len(ids), 1000):
-                chunk = ids[start:start + 1000]
+                chunk = ids[start : start + 1000]
                 placeholders = ", ".join(["%s"] * len(chunk))
                 cursor.execute(
                     "SELECT ticket_id, source_updated_at "
@@ -745,13 +768,20 @@ def import_year_tickets_to_mysql(
         task = progress.add_task(f"MySQL 导入 {year}", total=len(month_numbers))
         for month in month_numbers:
             from .monthly_export import build_month_label
+
             month_label = build_month_label(year, month)
             progress.update(task, description=f"导入 {month_label}")
             report = import_month_tickets_to_mysql(
-                config, dictionary, client, year, month,
-                per_page=per_page, limit_per_month=limit_per_month,
+                config,
+                dictionary,
+                client,
+                year,
+                month,
+                per_page=per_page,
+                limit_per_month=limit_per_month,
                 max_workers=max_workers,
-                batch_size=batch_size, api_rate_limit=api_rate_limit,
+                batch_size=batch_size,
+                api_rate_limit=api_rate_limit,
             )
             month_reports.append(report)
             total_imported += report["imported"]

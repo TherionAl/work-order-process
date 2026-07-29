@@ -128,7 +128,10 @@ def load_settings() -> Settings:
             "/orders",
             "/order/list",
         ],
-        request_methods=[method.upper() for method in (_split_csv(os.getenv("WORKORDER_HTTP_METHODS")) or ["GET", "POST"])],
+        request_methods=[
+            method.upper()
+            for method in (_split_csv(os.getenv("WORKORDER_HTTP_METHODS")) or ["GET", "POST"])
+        ],
     )
 
     return Settings(

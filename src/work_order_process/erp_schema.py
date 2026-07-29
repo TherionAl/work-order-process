@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 LEGACY_ERP_COLUMN_MAP = [
     ("序号", "seq_no"),
     ("合同编号", "contract_id"),

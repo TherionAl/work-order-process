@@ -44,7 +44,9 @@ def test_standalone_script_help():
     assert "ERP" in result.stdout
 
 
-@pytest.mark.parametrize("write_standard", [False, True], ids=["database-only", "with-standard-output"])
+@pytest.mark.parametrize(
+    "write_standard", [False, True], ids=["database-only", "with-standard-output"]
+)
 def test_cli_imports_dataframe_then_exports_database_snapshot(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_standard: bool
 ) -> None:
@@ -61,14 +63,12 @@ def test_cli_imports_dataframe_then_exports_database_snapshot(
     monkeypatch.setattr(
         cli,
         "build_standard_sheet",
-        lambda value, previous_period, current_period: events.append(
-            ("build", (value, previous_period, current_period))
-        )
-        or standard,
+        lambda value, previous_period, current_period: (
+            events.append(("build", (value, previous_period, current_period))) or standard
+        ),
     )
     monkeypatch.setattr(
-        cli,
-        "write_standard_sheet", lambda value, path: events.append(("standard", (value, path)))
+        cli, "write_standard_sheet", lambda value, path: events.append(("standard", (value, path)))
     )
     monkeypatch.setattr(
         cli,
@@ -78,8 +78,9 @@ def test_cli_imports_dataframe_then_exports_database_snapshot(
     monkeypatch.setattr(
         cli,
         "import_erp_dataframe",
-        lambda config, value: events.append(("import", (config, value)))
-        or {"create_dates": ["20260717"]},
+        lambda config, value: (
+            events.append(("import", (config, value))) or {"create_dates": ["20260717"]}
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -128,7 +129,9 @@ def test_cli_rejects_document_output_matching_standard_output_before_processing(
     monkeypatch.setattr(cli, "merge_erp_sources", lambda *args: events.append("merge"))
     monkeypatch.setattr(cli, "write_standard_sheet", lambda *args: events.append("standard"))
     monkeypatch.setattr(cli, "import_erp_dataframe", lambda *args: events.append("import"))
-    monkeypatch.setattr(cli, "export_erp_snapshot_document", lambda *args: events.append("document"))
+    monkeypatch.setattr(
+        cli, "export_erp_snapshot_document", lambda *args: events.append("document")
+    )
 
     with pytest.raises(ValueError, match="document-output.*standard-output.*different paths"):
         cli.main(

@@ -9,7 +9,6 @@ import pymysql
 
 from .config import MySQLConfig
 
-
 MAX_SYNC_LOG_READ_LIMIT = 1000
 
 SYNC_TASK_LOG_DDL = """
@@ -97,9 +96,7 @@ def read_sync_logs(config: MySQLConfig, limit: int) -> list[dict[str, Any]]:
     """Return the most recent bounded sync task logs."""
 
     if not 0 < limit <= MAX_SYNC_LOG_READ_LIMIT:
-        raise ValueError(
-            f"limit must be between 1 and {MAX_SYNC_LOG_READ_LIMIT}"
-        )
+        raise ValueError(f"limit must be between 1 and {MAX_SYNC_LOG_READ_LIMIT}")
 
     with pymysql.connect(
         host=config.host,

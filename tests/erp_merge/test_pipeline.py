@@ -176,7 +176,26 @@ def source_files(tmp_path: Path) -> tuple[Path, Path, Path]:
                 "444",
                 "",
             ],
-            ["OLD-TOTAL", "", "TOTAL", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "合计:"],
+            [
+                "OLD-TOTAL",
+                "",
+                "TOTAL",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "合计:",
+            ],
         ],
         metadata_rows=3,
     )
@@ -244,7 +263,14 @@ def test_old_mapping_keeps_historical_contract_business_and_amount_rules() -> No
             "分成比例": ["25%", "0.5"],
         }
     )
-    output_columns = ["合同类型", "暂估运维运营", "虚拟合同", "业务类型", "合同分类", "累计开票金额"]
+    output_columns = [
+        "合同类型",
+        "暂估运维运营",
+        "虚拟合同",
+        "业务类型",
+        "合同分类",
+        "累计开票金额",
+    ]
     rules = pd.Series(
         {
             "合同类型": "统签散开合同规则",

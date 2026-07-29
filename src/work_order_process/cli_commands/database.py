@@ -7,7 +7,6 @@ import argparse
 from ..api import ApiError
 from ..config import ConfigError, Settings
 
-
 COMMANDS = frozenset(
     {
         "mysql-init",
@@ -50,9 +49,7 @@ def handle(args: argparse.Namespace, settings: Settings, parser: argparse.Argume
         before = cli.schema_status(settings.mysql)
         status = cli.migrate_schema(settings.mysql)
         applied = [
-            version
-            for version in before.pending_versions
-            if version not in status.pending_versions
+            version for version in before.pending_versions if version not in status.pending_versions
         ]
         cli.console.print(
             f"applied={applied}, remaining={list(status.pending_versions)}, "

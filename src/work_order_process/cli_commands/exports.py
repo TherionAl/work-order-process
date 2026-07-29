@@ -15,7 +15,6 @@ from ..monthly_export import (
 )
 from ..time_metrics import export_month_time_metrics, export_ticket_time_metrics
 
-
 COMMANDS = frozenset(
     {
         "run",

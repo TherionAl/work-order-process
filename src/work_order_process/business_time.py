@@ -8,7 +8,6 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_WORK_SESSIONS = (
     (time(9, 0), time(11, 50)),
     (time(13, 40), time(18, 0)),
@@ -24,7 +23,7 @@ class WorkCalendar:
     work_sessions: tuple[tuple[time, time], ...] = DEFAULT_WORK_SESSIONS
 
     @classmethod
-    def from_json(cls, path: Path) -> "WorkCalendar":
+    def from_json(cls, path: Path) -> WorkCalendar:
         data = json.loads(path.read_text(encoding="utf-8"))
         overrides: dict[date, bool] = {}
         names: dict[date, str] = {}
@@ -43,7 +42,9 @@ class WorkCalendar:
                 overrides[day] = bool(item)
 
         sessions = tuple(_parse_session(item) for item in data.get("work_sessions", []))
-        return cls(overrides=overrides, names=names, work_sessions=sessions or DEFAULT_WORK_SESSIONS)
+        return cls(
+            overrides=overrides, names=names, work_sessions=sessions or DEFAULT_WORK_SESSIONS
+        )
 
     def is_workday(self, day: date) -> bool:
         if day in self.overrides:

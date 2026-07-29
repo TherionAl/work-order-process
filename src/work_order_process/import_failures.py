@@ -1,10 +1,9 @@
 """Structured, redacted failures for import workflows."""
 
-from dataclasses import dataclass
 import json
 import re
-from typing import Iterable
-
+from collections.abc import Iterable
+from dataclasses import dataclass
 
 _EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _CHINESE_MOBILE_PATTERN = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
@@ -32,9 +31,7 @@ _MAX_MESSAGE_LENGTH = 500
 _PAYLOAD_REDACTION = "[payload redacted]"
 
 
-def sanitize_failure_message(
-    exc: BaseException, *, secrets: Iterable[str] = ()
-) -> str:
+def sanitize_failure_message(exc: BaseException, *, secrets: Iterable[str] = ()) -> str:
     """Return a bounded exception message with common sensitive values removed."""
     return _sanitize_text(str(exc), secrets=secrets)
 
@@ -111,9 +108,7 @@ class FailureCollector:
         failure = ImportFailure(
             stage=stage,
             record_id=(
-                None
-                if record_id is None
-                else _sanitize_text(str(record_id), secrets=secret_values)
+                None if record_id is None else _sanitize_text(str(record_id), secrets=secret_values)
             ),
             source_row=source_row,
             error_type=type(exc).__name__,

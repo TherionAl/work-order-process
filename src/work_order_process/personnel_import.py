@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .config import MySQLConfig
-
 
 HEADER_COLUMN_MAP = {
     "人员姓名": "person_name",
@@ -141,10 +141,7 @@ def upsert_personnel_rows(config: MySQLConfig, rows: Iterable[dict[str, Any]]) -
         f"ON DUPLICATE KEY UPDATE {updates}, last_sync_at = CURRENT_TIMESTAMP"
     )
 
-    values = [
-        tuple(row.get(column) for column in PERSONNEL_COLUMNS)
-        for row in rows
-    ]
+    values = [tuple(row.get(column) for column in PERSONNEL_COLUMNS) for row in rows]
 
     with pymysql.connect(
         host=config.host,

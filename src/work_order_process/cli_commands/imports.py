@@ -7,8 +7,8 @@ from pathlib import Path
 
 from ..api import ApiError, WorkOrderClient
 from ..config import ConfigError, Settings
-from ..dictionary import DataDictionary
 from ..customer_account_import import import_customer_account_xlsx
+from ..dictionary import DataDictionary
 from ..erp_import import import_erp_xlsx
 from ..mysql_storage import (
     import_contacts_to_mysql,
@@ -19,7 +19,6 @@ from ..mysql_storage import (
     import_year_tickets_to_mysql,
 )
 from ..personnel_import import import_personnel_xls_to_mysql
-
 
 COMMANDS = frozenset(
     {
@@ -79,7 +78,10 @@ def handle(args: argparse.Namespace, settings: Settings, parser: argparse.Argume
         if not args.create_date:
             raise ApiError("import-customer-account 需要传入 --create-date。")
         report = import_customer_account_xlsx(
-            settings.mysql, Path(args.customer_account_file), args.create_date, args.sheet,
+            settings.mysql,
+            Path(args.customer_account_file),
+            args.create_date,
+            args.sheet,
         )
         _print_customer_account_import_report(report)
         return True
@@ -91,16 +93,23 @@ def handle(args: argparse.Namespace, settings: Settings, parser: argparse.Argume
             if args.command == "mysql-import-ticket":
                 if not args.ticket_id:
                     raise ApiError("Please pass --ticket-id for mysql-import-ticket.")
-                report = import_ticket_detail_to_mysql(settings.mysql, dictionary, client, args.ticket_id)
+                report = import_ticket_detail_to_mysql(
+                    settings.mysql, dictionary, client, args.ticket_id
+                )
                 _print_mysql_import_report(report)
             elif args.command == "mysql-import-month":
                 if args.month is None:
                     raise ApiError("mysql-import-month 需要传入 --month。")
                 report = import_month_tickets_to_mysql(
-                    settings.mysql, dictionary, client,
-                    year=args.year, month=args.month, per_page=args.per_page,
+                    settings.mysql,
+                    dictionary,
+                    client,
+                    year=args.year,
+                    month=args.month,
+                    per_page=args.per_page,
                     limit_per_month=args.limit_per_month,
-                    max_workers=args.max_workers, batch_size=args.batch_size,
+                    max_workers=args.max_workers,
+                    batch_size=args.batch_size,
                     api_rate_limit=args.api_rate_limit,
                 )
                 _print_mysql_month_report(report)
@@ -108,20 +117,27 @@ def handle(args: argparse.Namespace, settings: Settings, parser: argparse.Argume
                 if args.month is None:
                     raise ApiError("mysql-import-month-v1 需要传入 --month。")
                 report = import_month_tickets_serial(
-                    settings.mysql, dictionary, client,
-                    year=args.year, month=args.month, per_page=args.per_page,
+                    settings.mysql,
+                    dictionary,
+                    client,
+                    year=args.year,
+                    month=args.month,
+                    per_page=args.per_page,
                     limit_per_month=args.limit_per_month,
                     output_dir=settings.output_dir,
                 )
                 _print_mysql_month_report(report)
             elif args.command == "mysql-import-year":
                 report = import_year_tickets_to_mysql(
-                    settings.mysql, dictionary, client,
+                    settings.mysql,
+                    dictionary,
+                    client,
                     year=args.year,
                     months=[args.month] if args.month is not None else None,
                     per_page=args.per_page,
                     limit_per_month=args.limit_per_month,
-                    max_workers=args.max_workers, batch_size=args.batch_size,
+                    max_workers=args.max_workers,
+                    batch_size=args.batch_size,
                     api_rate_limit=args.api_rate_limit,
                     output_dir=settings.output_dir,
                 )
@@ -129,14 +145,20 @@ def handle(args: argparse.Namespace, settings: Settings, parser: argparse.Argume
             elif args.command == "mysql-import-customers":
                 sources = _resolve_sources(args.customers_source, ["companies", "customers"])
                 report = import_customers_to_mysql(
-                    settings.mysql, client, sources=sources, require_nonempty=not args.allow_empty,
+                    settings.mysql,
+                    client,
+                    sources=sources,
+                    require_nonempty=not args.allow_empty,
                     max_records=args.max_records,
                 )
                 _print_customer_contact_report("customers", report)
             else:
                 sources = _resolve_sources(args.contacts_source, ["contacts", "company_contacts"])
                 report = import_contacts_to_mysql(
-                    settings.mysql, client, sources=sources, require_nonempty=not args.allow_empty,
+                    settings.mysql,
+                    client,
+                    sources=sources,
+                    require_nonempty=not args.allow_empty,
                     max_records=args.max_records,
                 )
                 _print_customer_contact_report("contacts", report)
