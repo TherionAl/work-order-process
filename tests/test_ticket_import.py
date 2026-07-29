@@ -830,6 +830,88 @@ def test_atomic_batch_uses_non_autocommit_context_and_publishes_only_commits(
     assert report["failures_truncated"] is False
 
 
+class CommitFailureConnection(StatefulCommitConnection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.commit_attempts = 0
+        self.successful_commits = 0
+
+    def commit(self) -> None:
+        self.commit_attempts += 1
+        pending_ids = [ticket_id for ticket_id, _action in self.pending]
+        if self.commit_attempts == 1:
+            raise RuntimeError("initial batch commit rejected")
+        if pending_ids in (["B"], ["C"]):
+            raise RuntimeError(f"commit rejected {pending_ids[0]}")
+        self.successful_commits += 1
+        super().commit()
+
+
+def test_commit_failure_fallback_counts_only_the_one_committed_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = CommitFailureConnection()
+    monkeypatch.setattr(
+        ticket_import,
+        "build_ticket_detail_main_row",
+        lambda value: {"ticket_id": value["ticketId"]},
+    )
+    monkeypatch.setattr(
+        ticket_import,
+        "build_ticket_detail_custom_field_rows",
+        lambda raw, value: [{"field_key": "field_1"}],
+    )
+
+    def upsert(cursor, main_row, custom_rows):
+        ticket_id = str(main_row["ticket_id"])
+        cursor.connection.pending.append((ticket_id, "inserted"))
+        return "inserted"
+
+    monkeypatch.setattr(ticket_import, "_upsert_ticket_detail", upsert)
+
+    report = ticket_import._commit_batch(
+        connection,
+        {
+            ticket_id: (
+                {"ticketId": ticket_id},
+                {"ticketId": ticket_id},
+            )
+            for ticket_id in ("A", "B", "C")
+        },
+    )
+
+    assert connection.committed == [("A", "inserted")]
+    assert connection.pending == []
+    assert connection.commit_attempts == 4
+    assert connection.successful_commits == connection.commits == 1
+    assert connection.rollbacks == 3
+    assert connection.cursor_enters == connection.cursor_exits == 4
+    assert report == {
+        "imported": 1,
+        "updated": 0,
+        "skipped": 0,
+        "failed_ids": ["B", "C"],
+        "failures": [
+            {
+                "stage": "database",
+                "record_id": "B",
+                "source_row": None,
+                "error_type": "RuntimeError",
+                "safe_message": "commit rejected B",
+            },
+            {
+                "stage": "database",
+                "record_id": "C",
+                "source_row": None,
+                "error_type": "RuntimeError",
+                "safe_message": "commit rejected C",
+            },
+        ],
+        "failures_truncated": False,
+        "custom_rows": 1,
+    }
+
+
 @pytest.mark.parametrize(
     ("successful_action", "expected_counts", "expected_custom_rows"),
     [
