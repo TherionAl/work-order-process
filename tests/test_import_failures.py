@@ -70,3 +70,77 @@ def test_capture_returns_immutable_serializable_failure() -> None:
     }
     with pytest.raises(FrozenInstanceError):
         failure.stage = "database"  # type: ignore[misc]
+
+
+def test_capture_sanitizes_record_id_with_the_same_boundary_as_messages() -> None:
+    collector = FailureCollector()
+
+    failure = collector.capture(
+        stage="database",
+        record_id=(
+            'customer=user@example.com phone=13800138000 '
+            'password="my secret" token=api-secret'
+        ),
+        exc=RuntimeError("deadlock"),
+        secrets=("api-secret",),
+    )
+
+    assert failure.record_id is not None
+    assert "user@example.com" not in failure.record_id
+    assert "13800138000" not in failure.record_id
+    assert "my secret" not in failure.record_id
+    assert "api-secret" not in failure.record_id
+    assert "password=[redacted]" in failure.record_id
+
+
+def test_sanitize_failure_message_replaces_structured_payloads() -> None:
+    safe_message = sanitize_failure_message(
+        ValueError('{"token":"secret-value","records":[{"id":1}]}'),
+        secrets=("secret-value",),
+    )
+
+    assert safe_message == "[payload redacted]"
+
+
+def test_sanitize_failure_message_replaces_long_serialized_payloads() -> None:
+    safe_message = sanitize_failure_message(
+        ValueError("response={'token': 'secret-value'} " + "x" * 500),
+        secrets=("secret-value",),
+    )
+
+    assert safe_message == "[payload redacted]"
+
+
+def test_sanitize_failure_message_redacts_quoted_and_delimited_passwords() -> None:
+    safe_message = sanitize_failure_message(
+        ValueError('password="my secret"; password=second-secret, password=third-secret'),
+        secrets=(),
+    )
+
+    assert "my" not in safe_message
+    assert "secret" not in safe_message
+    assert "second-secret" not in safe_message
+    assert "third-secret" not in safe_message
+    assert safe_message.count("password=[redacted]") == 3
+
+
+def test_sanitize_failure_message_redacts_overlapping_secrets_longest_first() -> None:
+    safe_message = sanitize_failure_message(
+        ValueError("token=secret-value"),
+        secrets=("value", "secret-value", "value"),
+    )
+
+    assert safe_message == "token=[redacted]"
+
+
+def test_capture_reuses_iterable_secrets_for_record_id_and_message() -> None:
+    collector = FailureCollector()
+
+    failure = collector.capture(
+        stage="api",
+        record_id="T1",
+        exc=ValueError("token=generator-secret"),
+        secrets=(secret for secret in ("generator-secret",)),
+    )
+
+    assert "generator-secret" not in failure.safe_message

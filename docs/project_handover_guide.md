@@ -1038,6 +1038,8 @@ ERP 发布总控：
 - `work_order_process.import_failures.ImportFailure`：不可变的单条导入失败记录。
 - `work_order_process.import_failures.FailureCollector`：统计失败总数并保留有上限的失败详情；使用 `FailureCollector.capture` 捕获异常，使用 `FailureCollector.as_payload` 生成结果负载。
 - `work_order_process.import_failures.sanitize_failure_message`：移除显式密钥、邮箱、手机号和密码赋值，并将消息限制为 500 个字符。
+- `work_order_process.import_failures._sanitize_text`：为异常消息和记录标识符应用同一脱敏边界。
+- `work_order_process.import_failures._is_payload`：识别 JSON 或长序列化载荷，避免在失败详情中保留原始正文。
 
 #### 工单解析：`work_order_process.resolver`
 

@@ -1,28 +1,58 @@
 """Structured, redacted failures for import workflows."""
 
 from dataclasses import dataclass
+import json
 import re
 from typing import Iterable
 
 
 _EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _CHINESE_MOBILE_PATTERN = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
-_PASSWORD_ASSIGNMENT_PATTERN = re.compile(r"\bpassword\s*=\s*[^\s,;]+", re.IGNORECASE)
+_PASSWORD_ASSIGNMENT_PATTERN = re.compile(
+    r"""\bpassword\s*=\s*(?:
+        "(?:\\.|[^"])*"
+        | '(?:\\.|[^'])*'
+        | .*?
+    )(?=\s+[A-Za-z_]\w*\s*=|[,;}\]\r\n]|$)""",
+    re.IGNORECASE | re.VERBOSE,
+)
+_SERIALIZED_PAYLOAD_PATTERN = re.compile(
+    r"\b(?:payload|request|response|body|data)\s*[:=]\s*(?:\{|\[)",
+    re.IGNORECASE,
+)
 _MAX_MESSAGE_LENGTH = 500
+_PAYLOAD_REDACTION = "[payload redacted]"
 
 
 def sanitize_failure_message(
     exc: BaseException, *, secrets: Iterable[str] = ()
 ) -> str:
     """Return a bounded exception message with common sensitive values removed."""
-    message = str(exc)
-    for secret in secrets:
-        if secret:
-            message = message.replace(secret, "[redacted]")
+    return _sanitize_text(str(exc), secrets=secrets)
+
+
+def _sanitize_text(message: str, *, secrets: Iterable[str]) -> str:
+    if _is_payload(message):
+        return _PAYLOAD_REDACTION
+    unique_secrets = {secret for secret in secrets if secret}
+    for secret in sorted(unique_secrets, key=len, reverse=True):
+        message = message.replace(secret, "[redacted]")
     message = _PASSWORD_ASSIGNMENT_PATTERN.sub("password=[redacted]", message)
     message = _EMAIL_PATTERN.sub("[email]", message)
     message = _CHINESE_MOBILE_PATTERN.sub("[phone]", message)
     return message[:_MAX_MESSAGE_LENGTH]
+
+
+def _is_payload(message: str) -> bool:
+    stripped = message.strip()
+    if _SERIALIZED_PAYLOAD_PATTERN.search(message) and len(message) > _MAX_MESSAGE_LENGTH:
+        return True
+    if not (stripped.startswith(("{", "[")) and stripped.endswith(("}", "]"))):
+        return False
+    try:
+        return isinstance(json.loads(stripped), (dict, list))
+    except json.JSONDecodeError:
+        return False
 
 
 @dataclass(frozen=True)
@@ -62,12 +92,17 @@ class FailureCollector:
     ) -> ImportFailure:
         if record_id is None and source_row is None:
             raise ValueError("record_id or source_row is required")
+        secret_values = tuple(secrets)
         failure = ImportFailure(
             stage=stage,
-            record_id=None if record_id is None else str(record_id),
+            record_id=(
+                None
+                if record_id is None
+                else _sanitize_text(str(record_id), secrets=secret_values)
+            ),
             source_row=source_row,
             error_type=type(exc).__name__,
-            safe_message=sanitize_failure_message(exc, secrets=secrets),
+            safe_message=sanitize_failure_message(exc, secrets=secret_values),
         )
         self.total += 1
         if len(self.failures) < self.limit:
