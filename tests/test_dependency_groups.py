@@ -62,7 +62,11 @@ def _project_gitignore_ignores(root: Path, candidate: str) -> bool:
     source_path = Path(source)
     if not source_path.is_absolute():
         source_path = root / source_path
-    return not pattern.startswith("!") and source_path.resolve() == (root / ".gitignore").resolve()
+    return (
+        bool(pattern)
+        and not pattern.startswith("!")
+        and source_path.resolve() == (root / ".gitignore").resolve()
+    )
 
 
 def test_erp_analysis_dependencies_are_not_default_runtime_dependencies() -> None:
@@ -91,11 +95,7 @@ def test_yaml_parser_is_development_only() -> None:
 
 
 def test_coverage_runtime_file_is_ignored() -> None:
-    for candidate in (
-        ".coverage",
-        "htmlcov/index.html",
-        "htmlcov/assets/style.css",
-    ):
+    for candidate in (".coverage", "htmlcov/"):
         assert _project_gitignore_ignores(PROJECT_ROOT, candidate)
 
 
@@ -145,6 +145,24 @@ def test_git_ignore_contract_rejects_negation_and_leading_whitespace(
     (tmp_path / ".gitignore").write_text(gitignore_text, encoding="utf-8")
 
     assert not _project_gitignore_ignores(tmp_path, candidate)
+
+
+@pytest.mark.parametrize(
+    ("gitignore_text", "expected"),
+    [
+        ("htmlcov/index.html\nhtmlcov/assets/style.css\n\n", False),
+        ("htmlcov/\n", True),
+    ],
+)
+def test_htmlcov_ignore_contract_requires_directory_rule(
+    tmp_path: Path,
+    gitignore_text: str,
+    expected: bool,
+) -> None:
+    subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text(gitignore_text, encoding="utf-8")
+
+    assert _project_gitignore_ignores(tmp_path, "htmlcov/") is expected
 
 
 @pytest.mark.parametrize("exclude_source", ["info", "global"])
