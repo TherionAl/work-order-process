@@ -32,6 +32,23 @@ def test_failure_collector_redacts_sensitive_values_and_limits_details() -> None
     assert "13800138000" not in serialized
 
 
+def test_failure_summary_limit_zero_counts_and_truncates_without_details() -> None:
+    collector = FailureCollector(limit=0)
+
+    failure = collector.capture(
+        stage="database",
+        record_id="T1",
+        exc=RuntimeError("deadlock"),
+    )
+
+    assert failure.safe_message == "deadlock"
+    assert collector.as_payload() == {
+        "failure_count": 1,
+        "failures": [],
+        "failures_truncated": True,
+    }
+
+
 def test_failure_requires_record_id_or_source_row() -> None:
     collector = FailureCollector()
 

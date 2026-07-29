@@ -1,4 +1,7 @@
-from work_order_process.customer_contact_sync import sync_customer_entities
+from work_order_process.customer_contact_sync import (
+    sync_contact_entities,
+    sync_customer_entities,
+)
 
 
 class FakeClient:
@@ -151,3 +154,29 @@ def test_later_api_failure_preserves_prior_entity_counts_and_failures() -> None:
     assert report.failed == 2
     assert len(report.failures) == report.failed
     assert [failure["stage"] for failure in report.failures] == ["prepare", "api"]
+
+
+class ContactClient:
+    def iter_contacts(self):
+        yield [
+            {"cId": "U1", "name": "张三", "companyId": "C1"},
+            {"cId": "U1", "name": "重复记录", "companyId": "C1"},
+        ]
+
+
+def test_contact_source_uses_contact_shape_and_deduplicates_stable_id() -> None:
+    store = FakeBulkStore()
+
+    report = sync_contact_entities(
+        None,
+        ContactClient(),
+        sources=["company_contacts"],
+        store=store,
+    )
+
+    assert report.status == "success"
+    assert report.fetched == 2
+    assert report.inserted == 1
+    assert len(store.batches) == 1
+    assert [item["row"]["contact_id"] for item in store.batches[0]] == ["U1"]
+    assert store.batches[0][0]["source_name"] == "company_contacts"

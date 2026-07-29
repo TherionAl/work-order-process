@@ -166,6 +166,26 @@ def test_stage_loading_counts_source_accepted_and_cleaned_rows() -> None:
     assert cursor.executemany_calls[0][1][0][-1] == "20260729"
 
 
+def test_stage_insert_count_mismatch_raises_with_expected_and_actual_counts() -> None:
+    cursor = RecordingCursor(fetchone_values=[(0,)])
+    accepted = [None] * len(COLUMN_MAP)
+    accepted[1] = "Customer A"
+
+    with pytest.raises(
+        CustomerAccountImportError,
+        match="expected 1 staged rows, found 0",
+    ):
+        _load_stage_rows(
+            cursor,
+            [accepted],
+            create_date="20260729",
+            batch_size=10,
+        )
+
+    assert len(cursor.executemany_calls) == 1
+    assert cursor.executed[-1][0].startswith("SELECT COUNT(*) FROM")
+
+
 def test_publish_replaces_only_the_selected_snapshot() -> None:
     """Publishing a snapshot must leave every other snapshot untouched."""
     cursor = RecordingCursor(fetchone_values=[(2,)])
