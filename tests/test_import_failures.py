@@ -1,7 +1,10 @@
+import json
+
 import pytest
 
 from dataclasses import FrozenInstanceError
 
+import work_order_process.import_failures as import_failures
 from work_order_process.import_failures import (
     FailureCollector,
     ImportFailure,
@@ -172,3 +175,20 @@ def test_sanitize_failure_message_keeps_ordinary_diagnostic_prose() -> None:
     )
 
     assert safe_message == "connection timeout after 3 seconds"
+
+
+def test_payload_inspection_bounds_decoder_attempts_to_persisted_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    class CountingDecoder:
+        def raw_decode(self, text: str) -> tuple[object, int]:
+            nonlocal calls
+            calls += 1
+            raise json.JSONDecodeError("invalid", text, 0)
+
+    monkeypatch.setattr(import_failures.json, "JSONDecoder", CountingDecoder)
+
+    assert import_failures._is_payload("[" * 10_000) is False
+    assert calls <= 500
