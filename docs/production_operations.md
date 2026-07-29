@@ -27,7 +27,7 @@ chmod 0600 /etc/work-order-process/work-order.env
 
 ## daily_runner
 
-部署依赖时使用 `uv sync --all-groups --locked`，服务运行时直接调用
+部署运行时依赖时使用 `uv sync --locked --no-dev`，服务运行时直接调用
 `/opt/work_order_process/.venv/bin/python`，避免调度器启动时再次解析或修改环境。配置文件：
 
 - `deploy/work-order-daily.service`

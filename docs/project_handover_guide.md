@@ -57,7 +57,6 @@ D:\Users\python_project\work_order_process
 
 ```powershell
 Set-Location D:\Users\python_project\work_order_process
-git status --short
 git log --oneline -10
 uv --version
 ```
@@ -66,7 +65,7 @@ uv --version
 
 - 第 8.2 节的 `uv sync` 按 `uv.lock` 创建或更新 `.venv`，`uv lock --check` 不改锁文件。
 - 第 8.2 节的 pytest、Ruff、编译和两个 `--help` 均通过。
-- `git status --short` 可能显示业务人员放入 `data/` 的未跟踪文件，不得擅自删除或提交。
+- 第 8.2 节最后的 `git status --short` 可能显示业务人员放入 `data/` 的未跟踪文件，不得擅自删除或提交。
 
 ### 1.5 创建本地配置
 
@@ -458,6 +457,11 @@ uv run --all-groups work_order_process mysql-migrate
 - `mysql-init`：只创建新库基础结构并记录已满足迁移；不执行 pending migration DDL。
 - `mysql-migrate`：唯一显式执行 pending migration DDL 的命令。
 
+禁止模式（以下均不成立）：
+- `mysql-schema-status` 会写 DDL 或创建 `schema_version`。
+- `mysql-init` 会执行 pending migration 或调用 `migrate_schema`。
+- `mysql-migrate` 不是唯一写入 pending migration DDL 的入口。
+
 #### `mysql-drop-tables`（R3，危险）
 
 删除项目管理的工单基础表。CLI 不提供二次确认。
@@ -585,6 +589,11 @@ uv run --all-groups work_order_process mysql-import-contacts `
 - `--customers-source` 默认 `companies`。
 - `--contacts-source` 默认 `contacts`。
 - `--personnel-file` 默认 `None`，缺失时 `parser.error`。
+
+禁止模式（以下均不成立）：
+- `--customers-source` 默认 `both`。
+- `--contacts-source` 默认 `both`。
+- `--personnel-file` 存在隐式默认文件。
 
 ### 5.7 人员、客户台账和已整理 ERP
 
@@ -846,6 +855,10 @@ with WorkOrderClient(settings) as client:
 三次仍失败时应记录安全摘要、降低并发或 QPS，并按故障类型处理，不能无限循环或打印
 请求/响应正文。
 
+禁止模式（以下均不成立）：
+- `429`、`502`、`503`、`504` 不重试。
+- 任意 4xx 都重试。
+
 ### 6.4 工单解析和导入核心
 
 #### `work_order_process.resolver.resolve_ticket_detail_values`
@@ -871,6 +884,10 @@ with WorkOrderClient(settings) as client:
 以及 JSON/请求/响应载荷；排障时应关联 `sync_task_log` 与安全的 `stage`/ID，不能把原始
 客户资料或凭据贴入日志。
 
+禁止模式（以下均不成立）：
+- `FailureCollector` 无限保留失败详情。
+- `failures_truncated` 不反映详情截断。
+
 #### `work_order_process.mysql_storage.upsert_ticket_detail`
 
 单工单事务边界。主表使用 upsert，自定义字段按该工单全量刷新。主表与明细任一步失败都
@@ -878,14 +895,17 @@ with WorkOrderClient(settings) as client:
 
 #### 兼容层/实现映射
 
-| 旧调用入口 | 当前实现 | 兼容保证 |
+| 旧调用入口 | 当前实现 | 精确机制 |
 |---|---|---|
-| `mysql_storage.import_month_tickets_to_mysql` / `import_month_tickets_serial` / `import_year_tickets_to_mysql` | `ticket_import` 的同名实现 | 旧导入调用路径保持可用。 |
-| `_fetch_month_ticket_rows`、`_prefetch_ticket_entities`、`_str_or_none`、`_filter_ticket_rows_for_import`、`_same_datetime`、`_commit_batch_atomic`、`_fetch_batch_details`、`_commit_batch`、`_merge_failure_collectors`、`_merge_failure_payload`、`_safe_rollback` | `ticket_import` 的对应 private helper | 保留测试和旧调用方的 private helper 兼容。 |
-| `_write_sync_log` / `SYNC_TASK_LOG_DDL` | `sync_log.write_sync_log` / `sync_log.SYNC_TASK_LOG_DDL` | 同步日志提取后仍保留原模块入口。 |
-| `cli.main` / `cli.build_parser` / `cli.dispatch_command` | `cli_commands` handlers | 公开 CLI 入口和 monkeypatch seams 保留。 |
+| `mysql_storage.import_month_tickets_to_mysql` / `import_month_tickets_serial` / `import_year_tickets_to_mysql` | `ticket_import` 的同名实现 | 公共包装器在函数体内延迟导入 `ticket_import` 的同名实现，以避免循环导入。 |
+| `_fetch_month_ticket_rows`、`_prefetch_ticket_entities`、`_str_or_none`、`_filter_ticket_rows_for_import`、`_same_datetime`、`_commit_batch_atomic`、`_fetch_batch_details`、`_commit_batch`、`_merge_failure_collectors`、`_merge_failure_payload`、`_safe_rollback` | `ticket_import` 的对应 private helper | private helper 包装器同样在函数体内延迟导入，保留测试与旧调用方兼容。 |
+| `_write_sync_log` | `sync_log.write_sync_log` | `_write_sync_log` 是 module-level import 后的 direct delegate。 |
+| `SYNC_TASK_LOG_DDL` | `sync_log.SYNC_TASK_LOG_DDL` | `SYNC_TASK_LOG_DDL` 是 module-level re-export。 |
+| `cli.main` / `cli.build_parser` | `cli.py` 公开入口 | `cli.main` / `cli.build_parser` 保留在 `cli.py`。 |
+| `cli.dispatch_command` | `cli_commands` handlers | `cli.dispatch_command` 在函数内加载 `database`、`imports`、`exports`、`diagnostics` handlers；module-level import seams 保留给 monkeypatch。 |
 
-这些 facade 在函数内延迟导入实现，以避免循环导入；旧调用方无需改动。
+上述兼容层让旧调用方无需改动；只有标明的 `mysql_storage` 包装器和 `dispatch_command` 使用
+函数内延迟导入，不能把该机制泛化到 `_write_sync_log` 或 module-level re-export。
 
 ### 6.5 客户联系人同步核心
 
@@ -1847,7 +1867,6 @@ git status --short
 
 ```bash
 cd /opt/work_order_process
-git status --short
 git rev-parse HEAD
 systemctl status work-order-daily.service --no-pager
 ps -ef | grep -F work_order_process.daily_runner
@@ -1860,6 +1879,7 @@ ps -ef | grep -F work_order_process.daily_runner
 - 将部署的提交已经通过 CI。
 - `.venv` 使用 Python 3.14。
 - 只有一个调度器进程。
+- 已在第 8.2 节质量门槛末尾核对过 `git status --short`。
 
 ### 9.4 部署模板
 
@@ -1868,14 +1888,15 @@ ps -ef | grep -F work_order_process.daily_runner
 ```bash
 cd /opt/work_order_process
 git fetch --all --prune
-git status --short
 git pull --ff-only
+uv sync --locked --no-dev
 sudo systemctl restart work-order-daily.service
 sudo systemctl is-active work-order-daily.service
 sudo systemctl status work-order-daily.service --no-pager
 ```
 
-必须保证本地、远程仓库和服务器指向同一提交。
+必须保证本地、远程仓库和服务器指向同一提交。生产同步只安装运行时依赖，不强制安装 dev
+质量工具；systemd 始终使用项目 `.venv` 中的 Python。
 
 ### 9.5 版本化结构迁移的 8 步顺序
 

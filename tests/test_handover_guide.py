@@ -123,6 +123,69 @@ QUALITY_GATE_COMMANDS = (
     "git diff --check",
     "git status --short",
 )
+CONTRACTS = {
+    "迁移命令边界（契约）": (
+        (
+            "`mysql-schema-status`：只读；不创建或修改表、不写入版本、不执行 DDL。",
+            "`mysql-init`：只创建新库基础结构并记录已满足迁移；不执行 pending migration DDL。",
+            "`mysql-migrate`：唯一显式执行 pending migration DDL 的命令。",
+        ),
+        (
+            "`mysql-schema-status` 会写 DDL 或创建 `schema_version`。",
+            "`mysql-init` 会执行 pending migration 或调用 `migrate_schema`。",
+            "`mysql-migrate` 不是唯一写入 pending migration DDL 的入口。",
+        ),
+    ),
+    "受控重试：`work_order_process.api_transport`": (
+        (
+            "`429、502、503、504`",
+            "`httpx.TransportError`",
+            "默认最多尝试 3 次",
+            "合法的数值秒数 `Retry-After`",
+            "有上限的指数退避和抖动",
+        ),
+        (
+            "`429`、`502`、`503`、`504` 不重试。",
+            "任意 4xx 都重试。",
+        ),
+    ),
+    "结构化失败与安全摘要：`work_order_process.import_failures`": (
+        (
+            "`stage`、`record_id`、`source_row`、`error_type`、`safe_message`",
+            "默认最多保留 100 条失败详情",
+            "`safe_message` 默认最多 500 个字符",
+            "`failure_count` 统计总失败数，`failed_ids` 保持完整",
+            "`failures_truncated=true`",
+        ),
+        (
+            "`FailureCollector` 无限保留失败详情。",
+            "`failures_truncated` 不反映详情截断。",
+        ),
+    ),
+    "导入来源和人员文件默认值（契约）": (
+        (
+            "`--customers-source` 默认 `companies`",
+            "`--contacts-source` 默认 `contacts`",
+            "`--personnel-file` 默认 `None`，缺失时 `parser.error`",
+        ),
+        (
+            "`--customers-source` 默认 `both`。",
+            "`--contacts-source` 默认 `both`。",
+            "`--personnel-file` 存在隐式默认文件。",
+        ),
+    ),
+}
+QUALITY_ONLY_COMMANDS = frozenset(
+    {
+        "uv run --all-groups ruff check src tests",
+        "uv run --all-groups ruff format --check src tests",
+        "uv run --all-groups python -m compileall -q src tests",
+        "uv run work_order_process --help",
+        "uv run erp-merge --help",
+        "git diff --check",
+        "git status --short",
+    }
+)
 
 
 def _markdown_section(text: str, heading: str, level: int) -> str:
@@ -143,14 +206,68 @@ def _assert_exact_ordered_items(section: str, expected: tuple[str, ...]) -> None
 
 
 def _code_block_lines(section: str) -> list[str]:
-    match = re.search(r"```(?:powershell)?\n(.*?)\n```", section, re.DOTALL)
-    assert match is not None, "missing command block"
-    return [line for line in match.group(1).splitlines() if line]
+    blocks = _fenced_code_blocks(section)
+    assert len(blocks) == 1, "expected one PowerShell or bash command block"
+    return blocks[0]
 
 
 def _assert_required_statements(section: str, expected: tuple[str, ...]) -> None:
     missing = [statement for statement in expected if statement not in section]
     assert not missing, missing
+
+
+def _prohibited_claim_block(section: str) -> tuple[tuple[str, ...], tuple[int, int]]:
+    match = re.search(r"禁止模式（以下均不成立）：\n((?:- .+\n)+)", section)
+    assert match is not None, "missing prohibited-claim block"
+    claims = tuple(re.findall(r"^- (.+)$", match.group(1), re.MULTILINE))
+    return claims, match.span()
+
+
+def _assert_truth_and_prohibitions(
+    section: str, truth: tuple[str, ...], prohibited: tuple[str, ...]
+) -> None:
+    _assert_required_statements(section, truth)
+    actual, span = _prohibited_claim_block(section)
+    assert actual == prohibited
+    outside_block = section[: span[0]] + section[span[1] :]
+    contradictions = [claim for claim in prohibited if claim in outside_block]
+    assert not contradictions, contradictions
+
+
+def _fenced_code_blocks(text: str) -> list[list[str]]:
+    blocks: list[list[str]] = []
+    active: list[str] | None = None
+    for line in text.splitlines():
+        if active is None:
+            if line in {"```powershell", "```bash"}:
+                active = []
+            continue
+        if line == "```":
+            blocks.append([command for command in active if command])
+            active = None
+        else:
+            active.append(line)
+    assert active is None, "unterminated PowerShell or bash command block"
+    return blocks
+
+
+def _quality_only_commands(lines: list[str]) -> list[str]:
+    return [
+        line
+        for line in lines
+        if line in QUALITY_ONLY_COMMANDS
+        or line.startswith("uv run --all-groups pytest --cov=work_order_process")
+    ]
+
+
+def _assert_no_quality_commands_outside_authority(text: str, authority: tuple[str, ...]) -> None:
+    outside = [
+        command
+        for block in _fenced_code_blocks(text)
+        if tuple(block) != authority
+        for command in _quality_only_commands(block)
+    ]
+    assert not outside, outside
 
 
 def test_contract_helpers_reject_order_negation_and_omission() -> None:
@@ -166,16 +283,20 @@ def test_contract_helpers_reject_order_negation_and_omission() -> None:
         _assert_required_statements("stage, record_id", ("stage", "record_id", "safe_message"))
 
 
+def test_contract_helper_rejects_truth_with_a_contradiction() -> None:
+    truth, prohibited = CONTRACTS["迁移命令边界（契约）"]
+    valid = "\n".join(
+        (*truth, "禁止模式（以下均不成立）：", *(f"- {claim}" for claim in prohibited))
+    )
+    _assert_truth_and_prohibitions(valid + "\n", truth, prohibited)
+    with pytest.raises(AssertionError):
+        _assert_truth_and_prohibitions(valid + f"\n{prohibited[0]}\n", truth, prohibited)
+
+
 def test_handover_guide_has_exact_migration_boundaries() -> None:
     section = _markdown_section(_guide_text(), "迁移命令边界（契约）", 4)
-    _assert_required_statements(
-        section,
-        (
-            "`mysql-schema-status`：只读；不创建或修改表、不写入版本、不执行 DDL。",
-            "`mysql-init`：只创建新库基础结构并记录已满足迁移；不执行 pending migration DDL。",
-            "`mysql-migrate`：唯一显式执行 pending migration DDL 的命令。",
-        ),
-    )
+    truth, prohibited = CONTRACTS["迁移命令边界（契约）"]
+    _assert_truth_and_prohibitions(section, truth, prohibited)
 
 
 def test_handover_guide_has_exact_production_deployment_order() -> None:
@@ -187,42 +308,20 @@ def test_handover_guide_documents_bounded_failure_contract() -> None:
     section = _markdown_section(
         _guide_text(), "结构化失败与安全摘要：`work_order_process.import_failures`", 4
     )
-    _assert_required_statements(
-        section,
-        (
-            "`stage`、`record_id`、`source_row`、`error_type`、`safe_message`",
-            "默认最多保留 100 条失败详情",
-            "`safe_message` 默认最多 500 个字符",
-            "`failure_count` 统计总失败数，`failed_ids` 保持完整",
-            "`failures_truncated=true`",
-        ),
-    )
+    truth, prohibited = CONTRACTS["结构化失败与安全摘要：`work_order_process.import_failures`"]
+    _assert_truth_and_prohibitions(section, truth, prohibited)
 
 
 def test_handover_guide_documents_exact_retry_contract() -> None:
     section = _markdown_section(_guide_text(), "受控重试：`work_order_process.api_transport`", 4)
-    _assert_required_statements(
-        section,
-        (
-            "`429、502、503、504`",
-            "`httpx.TransportError`",
-            "默认最多尝试 3 次",
-            "合法的数值秒数 `Retry-After`",
-            "有上限的指数退避和抖动",
-        ),
-    )
+    truth, prohibited = CONTRACTS["受控重试：`work_order_process.api_transport`"]
+    _assert_truth_and_prohibitions(section, truth, prohibited)
 
 
 def test_handover_guide_documents_import_defaults_and_personnel_requirement() -> None:
     section = _markdown_section(_guide_text(), "导入来源和人员文件默认值（契约）", 4)
-    _assert_required_statements(
-        section,
-        (
-            "`--customers-source` 默认 `companies`",
-            "`--contacts-source` 默认 `contacts`",
-            "`--personnel-file` 默认 `None`，缺失时 `parser.error`",
-        ),
-    )
+    truth, prohibited = CONTRACTS["导入来源和人员文件默认值（契约）"]
+    _assert_truth_and_prohibitions(section, truth, prohibited)
 
 
 def test_personnel_usage_requires_an_explicit_file_for_every_command() -> None:
@@ -241,17 +340,16 @@ def test_handover_guide_indexes_compatibility_facades() -> None:
         (
             "`mysql_storage.import_month_tickets_to_mysql` / `import_month_tickets_serial` / "
             "`import_year_tickets_to_mysql`",
-            "`ticket_import` 的同名实现",
+            "函数体内延迟导入 `ticket_import` 的同名实现",
             "`_fetch_month_ticket_rows`、`_prefetch_ticket_entities`、`_str_or_none`、"
             "`_filter_ticket_rows_for_import`、`_same_datetime`、`_commit_batch_atomic`、"
             "`_fetch_batch_details`、`_commit_batch`、`_merge_failure_collectors`、"
             "`_merge_failure_payload`、`_safe_rollback`",
-            "`_write_sync_log` / `SYNC_TASK_LOG_DDL`",
-            "`sync_log.write_sync_log` / `sync_log.SYNC_TASK_LOG_DDL`",
-            "`cli.main` / `cli.build_parser` / `cli.dispatch_command`",
-            "`cli_commands` handlers",
-            "monkeypatch seams",
-            "函数内延迟导入",
+            "`_write_sync_log` 是 module-level import 后的 direct delegate",
+            "`SYNC_TASK_LOG_DDL` 是 module-level re-export",
+            "`cli.main` / `cli.build_parser` 保留在 `cli.py`",
+            "`cli.dispatch_command` 在函数内加载 `database`、`imports`、`exports`、`diagnostics` handlers",
+            "module-level import seams 保留给 monkeypatch",
             "旧调用方无需改动",
         ),
     )
@@ -261,7 +359,29 @@ def test_handover_guide_has_one_ordered_authoritative_quality_gate() -> None:
     text = _guide_text()
     section = _markdown_section(_guide_text(), "本地完整质量门槛（唯一权威）", 4)
     assert _code_block_lines(section) == list(QUALITY_GATE_COMMANDS)
-    assert text.count("uv sync --all-groups --locked") == 1
+    _assert_no_quality_commands_outside_authority(text, QUALITY_GATE_COMMANDS)
+
+
+def test_quality_gate_helper_rejects_an_external_partial_block() -> None:
+    with pytest.raises(AssertionError):
+        _assert_no_quality_commands_outside_authority(
+            "```bash\nuv sync --locked --no-dev\nuv run work_order_process --help\n```\n",
+            QUALITY_GATE_COMMANDS,
+        )
+
+
+def test_production_template_syncs_runtime_dependencies_before_restart() -> None:
+    guide_section = _markdown_section(_guide_text(), "9.4 部署模板", 3)
+    commands = _code_block_lines(guide_section)
+    assert commands.index("git pull --ff-only") < commands.index("uv sync --locked --no-dev")
+    assert commands.index("uv sync --locked --no-dev") < commands.index(
+        "sudo systemctl restart work-order-daily.service"
+    )
+    production_text = (PROJECT_ROOT / "docs" / "production_operations.md").read_text(
+        encoding="utf-8"
+    )
+    assert "uv sync --locked --no-dev" in production_text
+    assert "/opt/work_order_process/.venv/bin/python" in production_text
 
 
 def test_customer_account_terminology_is_consistent_in_scope() -> None:
