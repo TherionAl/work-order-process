@@ -76,7 +76,13 @@ def test_workbook_normalizes_numeric_employee_numbers_and_ignores_blank_rows(
 
 
 class _Cursor:
-    def __init__(self, *, failure: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        driver_rowcount: int | None = None,
+        failure: Exception | None = None,
+    ) -> None:
+        self.driver_rowcount = driver_rowcount
         self.failure = failure
         self.sql = ""
         self.values: list[tuple[object, ...]] = []
@@ -92,6 +98,8 @@ class _Cursor:
         self.values = values
         if self.failure:
             raise self.failure
+        if self.driver_rowcount is not None:
+            return self.driver_rowcount
         return len(values)
 
 
@@ -126,10 +134,16 @@ def _install_database(monkeypatch, connection: _Connection, calls: list[dict]) -
     monkeypatch.setitem(sys.modules, "pymysql", SimpleNamespace(connect=connect))
 
 
-def test_duplicate_employee_number_uses_upsert_and_keeps_latest_row(
+@pytest.mark.parametrize(
+    "driver_rowcount",
+    [0, 1, 2],
+    ids=["unchanged", "inserted", "updated"],
+)
+def test_unique_personnel_count_ignores_driver_rowcount_and_keeps_latest_row(
     monkeypatch,
+    driver_rowcount: int,
 ) -> None:
-    cursor = _Cursor()
+    cursor = _Cursor(driver_rowcount=driver_rowcount)
     connection = _Connection(cursor)
     connect_calls: list[dict] = []
     _install_database(monkeypatch, connection, connect_calls)

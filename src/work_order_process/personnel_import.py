@@ -120,7 +120,7 @@ def import_personnel_xls_to_mysql(config: MySQLConfig, path: Path) -> dict[str, 
 
 
 def upsert_personnel_rows(config: MySQLConfig, rows: Iterable[dict[str, Any]]) -> int:
-    """Upsert personnel rows by employee_no."""
+    """Upsert rows and return committed unique employee numbers, not driver rowcount."""
 
     import pymysql
 
@@ -155,9 +155,9 @@ def upsert_personnel_rows(config: MySQLConfig, rows: Iterable[dict[str, Any]]) -
     ) as connection:
         try:
             with connection.cursor() as cursor:
-                affected = cursor.executemany(sql, values)
+                cursor.executemany(sql, values)
             connection.commit()
-            return int(affected)
+            return len(rows)
         except Exception:
             connection.rollback()
             raise
