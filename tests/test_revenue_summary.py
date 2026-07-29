@@ -259,6 +259,7 @@ def test_cli_generates_revenue_summary_with_explicit_period_and_snapshot(monkeyp
         "load_settings",
         lambda: SimpleNamespace(mysql="mysql-config", output_dir=tmp_path, dictionary_path=tmp_path / "dictionary.pdf"),
     )
+    monkeypatch.setattr(cli, "assert_schema_current", lambda _: None)
     monkeypatch.setattr(cli.DataDictionary, "from_pdf", lambda _: object())
     monkeypatch.setattr(
         "sys.argv",
@@ -310,6 +311,7 @@ def test_cli_preview_exports_revenue_summary_without_persisting(monkeypatch, tmp
         "load_settings",
         lambda: SimpleNamespace(mysql="mysql-config", output_dir=tmp_path, dictionary_path=tmp_path / "dictionary.pdf"),
     )
+    monkeypatch.setattr(cli, "assert_schema_current", lambda _: None)
     monkeypatch.setattr(cli.DataDictionary, "from_pdf", lambda _: object())
     monkeypatch.setattr(
         "sys.argv",

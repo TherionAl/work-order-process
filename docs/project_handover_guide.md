@@ -427,7 +427,9 @@ uv run --all-groups work_order_process dictionary
 
 #### `mysql-init`（R3）
 
-创建工单基础表、客户联系人分析表以及所需分区。该命令不是清空重建，但会执行 DDL。
+创建工单基础表、客户联系人分析表以及所需分区，并为已经满足的迁移记录基线版本。
+该命令不会应用尚未满足的迁移；已有库升级必须使用 `mysql-migrate`。该命令不是清空重建，
+但会执行 DDL。
 
 ```powershell
 uv run --all-groups work_order_process mysql-init
@@ -435,6 +437,23 @@ uv run --all-groups work_order_process mysql-init
 
 执行前确认 `.env` 指向目标库；执行后查询 `INFORMATION_SCHEMA.TABLES` 和
 `INFORMATION_SCHEMA.PARTITIONS`。
+
+#### `mysql-schema-status`（R0）
+
+只读检查 `schema_version`、待执行版本和 checksum 漂移，不创建或修改任何表。
+
+```powershell
+uv run --all-groups work_order_process mysql-schema-status
+```
+
+#### `mysql-migrate`（R3）
+
+显式应用按版本排序的待办迁移。MySQL DDL 可能自动提交；失败后可重跑，迁移会先用
+`is_satisfied` 对账已完成的 DDL，再写入版本记录。
+
+```powershell
+uv run --all-groups work_order_process mysql-migrate
+```
 
 #### `mysql-drop-tables`（R3，危险）
 
@@ -710,6 +729,10 @@ uv run --all-groups work_order_process metric-ticket `
 | `work_order_process.import_failures` | 导入失败的结构化、脱敏和有界收集 | 纯转换 |
 | `work_order_process.transform` | 旧式列表筛选、补全和翻译 | 纯转换 |
 | `work_order_process.mysql_storage` | 工单表、分区、导入和同步日志 | MySQL、API、失败 JSON |
+| `work_order_process.schema_migrations` | 版本发现、状态预检和显式迁移编排 | MySQL；status 只读 |
+| `work_order_process.migrations.__init__` | 版本化迁移子包标识 | 无 |
+| `work_order_process.migrations.v0001_current_schema` | 当前工单基础结构基线 | 显式迁移时执行 MySQL DDL |
+| `work_order_process.migrations.v0002_erp_allocation_columns` | ERP 年度分摊列迁移 | 显式迁移时执行 MySQL DDL |
 | `work_order_process.structured_entities` | 客户和联系人标准行 | 纯转换 |
 | `work_order_process.customer_contact_sync` | 当前表、历史表和原始记录同步 | API、MySQL |
 | `work_order_process.personnel_import` | 人员 `.xls` 导入 | Excel、MySQL |
@@ -1099,6 +1122,28 @@ ERP 发布总控：
 - `work_order_process.mysql_storage._commit_batch_atomic`：新连接单事务提交一批。
 - `work_order_process.mysql_storage._fetch_batch_details`：并发取原始和解析详情。
 - `work_order_process.mysql_storage._commit_batch`：批量写入并按需逐行定位。
+
+#### 版本化迁移：`work_order_process.schema_migrations`
+
+- `work_order_process.schema_migrations.Migration`：不可变迁移元数据和行为。
+- `work_order_process.schema_migrations.SchemaStatus`：当前、目标、待办和漂移版本状态。
+- `work_order_process.schema_migrations.SchemaMigrationError`：checksum 漂移、待办版本或迁移失败。
+- `work_order_process.schema_migrations.discover_migrations`：按版本发现迁移并计算模块 SHA-256。
+- `work_order_process.schema_migrations.inspect_schema_status`：校验已记录版本名称和 checksum。
+- `work_order_process.schema_migrations.schema_status`：只读状态入口，不创建 `schema_version`。
+- `work_order_process.schema_migrations.migrate_schema`：唯一用于升级已有结构的显式入口。
+- `work_order_process.schema_migrations.apply_pending_migrations`：逐个执行、成功后记录并提交。
+- `work_order_process.schema_migrations.record_satisfied_migrations`：仅记录已满足版本，不执行迁移 DDL。
+- `work_order_process.schema_migrations.record_satisfied_schema`：`mysql-init` 后记录满足的基线。
+- `work_order_process.schema_migrations.assert_schema_current`：普通写入和调度任务的只读前置检查。
+- `work_order_process.schema_migrations._schema_version_exists`：只读判断版本表是否存在。
+- `work_order_process.schema_migrations._unapplied_status`：构造未建立版本表时的待办状态。
+- `work_order_process.migrations.v0001_current_schema.is_satisfied`：检查基础表和兼容列。
+- `work_order_process.migrations.v0001_current_schema.apply`：创建当前基础表并补齐基线列。
+- `work_order_process.migrations.v0002_erp_allocation_columns._table_exists`：判断可选 ERP 表是否存在。
+- `work_order_process.migrations.v0002_erp_allocation_columns.missing_columns`：计算缺失的年度分摊列。
+- `work_order_process.migrations.v0002_erp_allocation_columns.is_satisfied`：ERP 表不存在或列齐全时满足。
+- `work_order_process.migrations.v0002_erp_allocation_columns.apply`：只增加缺失的年度分摊列。
 - `work_order_process.mysql_storage._merge_failure_collectors`：合并有界的结构化失败收集器。
 - `work_order_process.mysql_storage._merge_failure_payload`：合并批次报告中的安全失败明细。
 - `work_order_process.mysql_storage._safe_rollback`：连接可用时回滚。
@@ -1174,7 +1219,7 @@ ERP 发布总控：
 #### 辅助表：`work_order_process.auxiliary_schema`
 
 - `work_order_process.auxiliary_schema.ensure_auxiliary_schema`：幂等创建 `erp_data` 和
-  `customer_account`。
+  `customer_account`；不再隐式修改已存在的 ERP 表。
 
 #### ERP 结构和迁移
 
@@ -1182,7 +1227,8 @@ ERP 发布总控：
 - `work_order_process.erp_schema.legacy_headers`：69 列历史表头。
 - `work_order_process.erp_schema.standard_headers`：78 列当前表头。
 - `work_order_process.erp_migrations`：ERP 列迁移模块。
-- `work_order_process.erp_migrations.ensure_erp_allocation_columns`：只增加缺少的九列。
+- `work_order_process.erp_migrations.ensure_erp_allocation_columns`：显式调用时只增加缺少的九列，
+  作为 `v0002` 的兼容 wrapper。
 - `work_order_process.erp_document_export`：ERP 数据库导出模块。
 - `work_order_process.erp_document_export.export_erp_snapshot_document`：流式导出单快照。
 

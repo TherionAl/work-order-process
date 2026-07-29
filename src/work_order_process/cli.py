@@ -51,6 +51,12 @@ from .erp_import import import_erp_xlsx
 from .customer_account_import import import_customer_account_xlsx
 from .personnel_import import import_personnel_xls_to_mysql
 from .revenue_summary import generate_revenue_summary
+from .schema_migrations import (
+    assert_schema_current,
+    migrate_schema,
+    record_satisfied_schema,
+    schema_status,
+)
 from .time_metrics import (
     DEFAULT_CALENDAR_PATH,
     DEFAULT_METRICS_CONFIG,
@@ -70,7 +76,8 @@ def main() -> None:
         "command",
         choices=[
             "run", "monthly-tickets", "template-samples",
-            "mysql-init", "mysql-drop-tables", "mysql-create-analysis-views",
+            "mysql-init", "mysql-schema-status", "mysql-migrate",
+            "mysql-drop-tables", "mysql-create-analysis-views",
             "mysql-import-ticket", "mysql-import-month", "mysql-import-month-v1", "mysql-import-year",
             "mysql-import-customers", "mysql-import-contacts", "mysql-probe-customers", "mysql-probe-contacts",
             "mysql-import-personnel",
@@ -206,6 +213,62 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = load_settings()
+
+    if args.command == "mysql-schema-status":
+        status = schema_status(settings.mysql)
+        console.print(
+            f"current={status.current_version}, target={status.target_version}, "
+            f"pending={list(status.pending_versions)}, "
+            f"drifted={list(status.drifted_versions)}"
+        )
+        return
+
+    if args.command == "mysql-migrate":
+        before = schema_status(settings.mysql)
+        status = migrate_schema(settings.mysql)
+        applied = [
+            version
+            for version in before.pending_versions
+            if version not in status.pending_versions
+        ]
+        console.print(
+            f"applied={applied}, remaining={list(status.pending_versions)}, "
+            f"current={status.current_version}, target={status.target_version}"
+        )
+        return
+
+    if args.command == "mysql-init":
+        ensure_mysql_schema(settings.mysql)
+        migration_status = record_satisfied_schema(settings.mysql)
+        partitions = get_existing_partitions(settings.mysql)
+        month_count = len(partitions) - (1 if "pmax" in partitions else 0)
+        console.print(
+            f"[green]MySQL 数据库初始化完成[/green]\n"
+            f"地址: {settings.mysql.host}:{settings.mysql.port}/{settings.mysql.database}\n"
+            f"已创建 5 张表，{month_count} 个月分区 + pmax\n"
+            f"migration current={migration_status.current_version}, "
+            f"pending={list(migration_status.pending_versions)}"
+        )
+        return
+
+    schema_mutating_commands = {
+        "mysql-create-analysis-views",
+        "mysql-drop-tables",
+        "mysql-import-personnel",
+        "import-erp",
+        "generate-revenue-summary",
+        "import-customer-account",
+        "mysql-add-partitions",
+        "mysql-import-ticket",
+        "mysql-import-month",
+        "mysql-import-month-v1",
+        "mysql-import-year",
+        "mysql-import-customers",
+        "mysql-import-contacts",
+    }
+    if args.command in schema_mutating_commands:
+        assert_schema_current(settings.mysql)
+
     dictionary = DataDictionary.from_pdf(settings.dictionary_path)
 
     if args.command == "dictionary":
@@ -213,17 +276,6 @@ def main() -> None:
         dictionary.save_json(output)
         console.print(f"数据字典已保存到 {output}")
         _print_dictionary_summary(dictionary)
-        return
-
-    if args.command == "mysql-init":
-        ensure_mysql_schema(settings.mysql)
-        partitions = get_existing_partitions(settings.mysql)
-        month_count = len(partitions) - (1 if "pmax" in partitions else 0)
-        console.print(
-            f"[green]MySQL 数据库初始化完成[/green]\n"
-            f"地址: {settings.mysql.host}:{settings.mysql.port}/{settings.mysql.database}\n"
-            f"已创建 5 张表，{month_count} 个月分区 + pmax"
-        )
         return
 
     if args.command == "mysql-create-analysis-views":

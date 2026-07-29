@@ -23,6 +23,7 @@ ALLOCATION_COLUMNS = {
 class FakeCursor:
     existing_columns: set[str]
     statements: list[tuple[str, object]] = field(default_factory=list)
+    result: list[tuple[object, ...]] = field(default_factory=list)
 
     def __enter__(self) -> FakeCursor:
         return self
@@ -32,9 +33,18 @@ class FakeCursor:
 
     def execute(self, statement: str, params: object = None) -> None:
         self.statements.append((statement, params))
+        if "information_schema.tables" in statement:
+            self.result = [(1,)]
+        elif "information_schema.columns" in statement:
+            self.result = [(column,) for column in self.existing_columns]
+        elif statement.startswith("ALTER TABLE"):
+            self.existing_columns.add(statement.split()[5])
 
-    def fetchall(self) -> list[tuple[str]]:
-        return [(column,) for column in self.existing_columns]
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return self.result
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        return self.result[0] if self.result else None
 
 
 @dataclass
@@ -104,13 +114,19 @@ def test_adds_only_missing_allocation_columns(monkeypatch) -> None:
     ]
 
 
-def test_ensure_auxiliary_schema_runs_allocation_migration(monkeypatch) -> None:
+def test_ensure_auxiliary_schema_does_not_alter_existing_tables(monkeypatch) -> None:
     from work_order_process import auxiliary_schema
 
-    calls: list[MySQLConfig] = []
-    monkeypatch.setattr(auxiliary_schema, "ensure_erp_allocation_columns", calls.append)
-    monkeypatch.setattr(auxiliary_schema, "pymysql", FakePyMySQL(FakeConnection(FakeCursor(set()))))
+    cursor = FakeCursor(set())
+    monkeypatch.setattr(
+        auxiliary_schema,
+        "pymysql",
+        FakePyMySQL(FakeConnection(cursor)),
+    )
 
     auxiliary_schema.ensure_auxiliary_schema(_config())
 
-    assert calls == [_config()]
+    statements = [statement for statement, _ in cursor.statements]
+    assert len(statements) == 2
+    assert all("CREATE TABLE IF NOT EXISTS" in statement for statement in statements)
+    assert not any(statement.startswith("ALTER TABLE") for statement in statements)

@@ -7,7 +7,6 @@ from pathlib import Path
 import pymysql
 
 from .config import MySQLConfig, PROJECT_ROOT
-from .erp_migrations import ensure_erp_allocation_columns
 
 
 def ensure_auxiliary_schema(config: MySQLConfig) -> None:
@@ -34,4 +33,3 @@ def ensure_auxiliary_schema(config: MySQLConfig) -> None:
         with connection.cursor() as cursor:
             for statement in statements:
                 cursor.execute(statement)
-    ensure_erp_allocation_columns(config)

@@ -37,6 +37,7 @@ from .mysql_storage import (
     import_customers_to_mysql,
     import_month_tickets_to_mysql,
 )
+from .schema_migrations import assert_schema_current
 
 def configure_logging() -> None:
     logging.basicConfig(
@@ -171,7 +172,8 @@ def job_monthly_maintenance() -> None:
 
 
 def main() -> None:
-    _runtime()
+    settings, _ = _runtime()
+    assert_schema_current(settings.mysql)
     # 注册任务
     sched.add_job(
         job_sync_tickets_daily,

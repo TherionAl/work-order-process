@@ -5,6 +5,8 @@ from datetime import datetime
 import pytest
 
 from work_order_process import daily_runner
+from work_order_process.config import MySQLConfig
+from work_order_process.schema_migrations import SchemaMigrationError
 
 
 def test_maintenance_months_cover_old_previous_year_months_in_january() -> None:
@@ -80,3 +82,25 @@ def test_daily_job_processes_remaining_months_after_exception(
         daily_runner.job_sync_tickets_daily()
 
     assert len(calls) == 4
+
+
+def test_daily_runner_refuses_outdated_schema(monkeypatch) -> None:
+    config = MySQLConfig(
+        host="db.example",
+        port=3306,
+        user="user",
+        password="secret",
+        database="warehouse",
+    )
+    settings = type("Settings", (), {"mysql": config})()
+    monkeypatch.setattr(daily_runner, "_runtime", lambda: (settings, object()))
+    monkeypatch.setattr(
+        daily_runner,
+        "assert_schema_current",
+        lambda config: (_ for _ in ()).throw(
+            SchemaMigrationError("pending migration 2")
+        ),
+    )
+
+    with pytest.raises(SchemaMigrationError, match="pending migration 2"):
+        daily_runner.main()
