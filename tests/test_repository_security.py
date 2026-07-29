@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +16,8 @@ TEXT_SUFFIXES = {"", ".md", ".py", ".toml", ".yml", ".yaml"}
 CI_QUALITY_COMMANDS = (
     "uv run --all-groups ruff format --check src tests",
     "uv run --all-groups ruff check src tests",
-    "uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q",
+    "uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 "
+    "--cov-config=pyproject.toml -q",
 )
 COVERAGE_DENOMINATOR_FILTERS = {
     "exclude_also",
@@ -32,13 +35,88 @@ COVERAGE_DEFAULT_FILTER_OPTIONS = (
 )
 
 
+def _pyproject() -> dict[str, Any]:
+    with (PROJECT_ROOT / "pyproject.toml").open("rb") as file:
+        return tomllib.load(file)
+
+
+def _workflow_jobs(workflow: str) -> dict[str, object]:
+    parsed = yaml.load(workflow, Loader=yaml.BaseLoader)
+    assert isinstance(parsed, dict), "workflow must be a YAML mapping"
+    jobs = parsed.get("jobs")
+    assert isinstance(jobs, dict), "workflow must define a jobs mapping"
+    return jobs
+
+
+def _is_explicit_false(value: object) -> bool:
+    return value is False or (isinstance(value, str) and value.strip().lower() == "false")
+
+
+def _pytest_addopts_tokens(addopts: object) -> list[str]:
+    values = [addopts] if isinstance(addopts, str) else addopts
+    assert isinstance(values, list), "pytest addopts must be a string or list"
+
+    tokens: list[str] = []
+    for value in values:
+        assert isinstance(value, str), "pytest addopts entries must be strings"
+        tokens.extend(shlex.split(value, posix=True))
+    return tokens
+
+
+def _assert_addopts_tokens_safe(addopts: object) -> None:
+    tokens = _pytest_addopts_tokens(addopts)
+    for index, token in enumerate(tokens):
+        assert token != "--no-cov", "pytest addopts must not disable coverage"
+        assert not (token == "--cov" or token.startswith(("--cov=", "--cov-"))), (
+            f"pytest addopts must not override coverage: {token}"
+        )
+        assert token not in {"-pno:cov", "-p=no:cov"}, (
+            "pytest addopts must not disable the coverage plugin"
+        )
+        if token == "-p" and index + 1 < len(tokens):
+            assert tokens[index + 1] != "no:cov", (
+                "pytest addopts must not disable the coverage plugin"
+            )
+
+
+def _assert_pytest_addopts_safe(config: dict[str, Any]) -> None:
+    addopts = config.get("tool", {}).get("pytest", {}).get("ini_options", {}).get("addopts")
+    if addopts is not None:
+        _assert_addopts_tokens_safe(addopts)
+
+
+def _assert_environment_safe(environment: object) -> None:
+    if environment is None:
+        return
+    assert isinstance(environment, dict), "environment must be a mapping"
+    normalized = {str(key).upper(): value for key, value in environment.items()}
+    forbidden = {"COVERAGE_PROCESS_START", "COVERAGE_RCFILE"} & normalized.keys()
+    assert not forbidden, f"environment overrides coverage configuration: {forbidden}"
+    if "PYTEST_ADDOPTS" in normalized:
+        _assert_addopts_tokens_safe(normalized["PYTEST_ADDOPTS"])
+
+
+def _environment_is_safe(environment: object) -> bool:
+    try:
+        _assert_environment_safe(environment)
+    except AssertionError:
+        return False
+    return True
+
+
 def _job_enforces_quality_commands(job: object) -> bool:
     if not isinstance(job, dict):
         return False
-    if "if" in job:
+    if "if" in job or "needs" in job:
+        return False
+    if "continue-on-error" in job and not _is_explicit_false(job["continue-on-error"]):
+        return False
+    if not _environment_is_safe(job.get("env")):
         return False
     steps = job.get("steps")
     if not isinstance(steps, list):
+        return False
+    if any(isinstance(step, dict) and not _environment_is_safe(step.get("env")) for step in steps):
         return False
 
     cursor = 0
@@ -52,7 +130,7 @@ def _job_enforces_quality_commands(job: object) -> bool:
                 continue
             if "if" in step:
                 continue
-            if step.get("continue-on-error", False) is not False:
+            if "continue-on-error" in step and not _is_explicit_false(step["continue-on-error"]):
                 continue
             cursor = index + 1
             break
@@ -62,10 +140,10 @@ def _job_enforces_quality_commands(job: object) -> bool:
 
 
 def _assert_ci_quality_workflow(workflow: str) -> None:
-    parsed = yaml.safe_load(workflow)
+    parsed = yaml.load(workflow, Loader=yaml.BaseLoader)
     assert isinstance(parsed, dict), "workflow must be a YAML mapping"
-    jobs = parsed.get("jobs")
-    assert isinstance(jobs, dict), "workflow must define a jobs mapping"
+    _assert_environment_safe(parsed.get("env"))
+    jobs = _workflow_jobs(workflow)
     assert any(_job_enforces_quality_commands(job) for job in jobs.values()), (
         "one CI job must enforce exact format, lint, and coverage commands in order"
     )
@@ -84,8 +162,10 @@ def _assert_coverage_configuration(config: dict[str, Any]) -> None:
         assert not narrowing, f"coverage.{section_name} narrows the denominator: {narrowing}"
 
 
-def _load_effective_coverage_configuration() -> Coverage:
-    coverage = Coverage(config_file=True)
+def _load_effective_coverage_configuration(
+    config_file: Path | str = PROJECT_ROOT / "pyproject.toml",
+) -> Coverage:
+    coverage = Coverage(config_file=str(config_file))
     coverage.load()
     return coverage
 
@@ -143,7 +223,7 @@ def test_ci_runs_lint_format_and_coverage_gate(monkeypatch: pytest.MonkeyPatch) 
     text = (PROJECT_ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
 
     _assert_ci_quality_workflow(text)
-    monkeypatch.delenv("COVERAGE_RCFILE", raising=False)
+    _assert_pytest_addopts_safe(_pyproject())
     monkeypatch.chdir(PROJECT_ROOT)
     _assert_effective_coverage_configuration(_load_effective_coverage_configuration())
 
@@ -154,7 +234,7 @@ def test_ci_run_extractor_ignores_comments() -> None:
     steps:
       # - run: uv run --all-groups ruff format --check src tests
       # - run: uv run --all-groups ruff check src tests
-      # - run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
+      # - run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 --cov-config=pyproject.toml -q
       - name: Actual step
         run: uv run --all-groups pytest -q
 """
@@ -222,7 +302,7 @@ def test_coverage_contract_rejects_denominator_narrowing(
           run: uv run --all-groups ruff format --check src tests
         with:
           run: uv run --all-groups ruff check src tests
-        run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
+        run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 --cov-config=pyproject.toml -q
 """,
         """jobs:
   format:
@@ -231,7 +311,7 @@ def test_coverage_contract_rejects_denominator_narrowing(
   tests:
     steps:
       - run: uv run --all-groups ruff check src tests
-      - run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
+      - run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 --cov-config=pyproject.toml -q
 """,
         """jobs:
   quality:
@@ -239,7 +319,7 @@ def test_coverage_contract_rejects_denominator_narrowing(
       - run: uv run --all-groups ruff format --check src tests
         if: false
       - run: uv run --all-groups ruff check src tests
-      - run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
+      - run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 --cov-config=pyproject.toml -q
 """,
         """jobs:
   quality:
@@ -247,7 +327,7 @@ def test_coverage_contract_rejects_denominator_narrowing(
       - run: uv run --all-groups ruff format --check src tests
       - run: uv run --all-groups ruff check src tests
         continue-on-error: true
-      - run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
+      - run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 --cov-config=pyproject.toml -q
 """,
         """jobs:
   quality:
@@ -255,7 +335,7 @@ def test_coverage_contract_rejects_denominator_narrowing(
     steps:
       - run: uv run --all-groups ruff format --check src tests
       - run: uv run --all-groups ruff check src tests
-      - run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
+      - run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 --cov-config=pyproject.toml -q
 """,
         """jobs:
   quality:
@@ -265,7 +345,7 @@ def test_coverage_contract_rejects_denominator_narrowing(
           SCRIPT: |
             run: uv run --all-groups ruff format --check src tests
             run: uv run --all-groups ruff check src tests
-        run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
+        run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 --cov-config=pyproject.toml -q
 """,
     ],
 )
@@ -285,13 +365,154 @@ def test_ci_contract_accepts_literal_and_folded_run_scalars() -> None:
           src tests
       - run: >-
           uv run --all-groups pytest
-          --cov=work_order_process --cov-fail-under=70 -q
+          --cov=work_order_process --cov-fail-under=70 --cov-config=pyproject.toml -q
 """
 
     _assert_ci_quality_workflow(workflow)
 
 
-def test_effective_coverage_contract_rejects_higher_priority_config(
+@pytest.mark.parametrize("job_guard", ["needs: build", "continue-on-error: true"])
+def test_ci_contract_rejects_job_dependencies_and_error_bypass(job_guard: str) -> None:
+    workflow = f"""jobs:
+  quality:
+    {job_guard}
+    steps:
+      - run: {CI_QUALITY_COMMANDS[0]}
+      - run: {CI_QUALITY_COMMANDS[1]}
+      - run: {CI_QUALITY_COMMANDS[2]}
+"""
+
+    with pytest.raises(AssertionError):
+        _assert_ci_quality_workflow(workflow)
+
+
+def test_ci_contract_allows_explicit_false_error_guards() -> None:
+    workflow = f"""jobs:
+  quality:
+    continue-on-error: false
+    steps:
+      - run: {CI_QUALITY_COMMANDS[0]}
+        continue-on-error: false
+      - run: {CI_QUALITY_COMMANDS[1]}
+        continue-on-error: false
+      - run: {CI_QUALITY_COMMANDS[2]}
+        continue-on-error: false
+"""
+
+    _assert_ci_quality_workflow(workflow)
+
+
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        f"""env:
+  COVERAGE_RCFILE: decoy.rc
+jobs:
+  quality:
+    steps:
+      - run: {CI_QUALITY_COMMANDS[0]}
+      - run: {CI_QUALITY_COMMANDS[1]}
+      - run: {CI_QUALITY_COMMANDS[2]}
+""",
+        f"""jobs:
+  quality:
+    env:
+      COVERAGE_PROCESS_START: decoy.rc
+    steps:
+      - run: {CI_QUALITY_COMMANDS[0]}
+      - run: {CI_QUALITY_COMMANDS[1]}
+      - run: {CI_QUALITY_COMMANDS[2]}
+""",
+        f"""jobs:
+  quality:
+    env:
+      PYTEST_ADDOPTS: --cov-config=decoy.rc
+    steps:
+      - run: {CI_QUALITY_COMMANDS[0]}
+      - run: {CI_QUALITY_COMMANDS[1]}
+      - run: {CI_QUALITY_COMMANDS[2]}
+""",
+        f"""jobs:
+  quality:
+    env:
+      PYTEST_ADDOPTS: --cov-fail-under=0
+    steps:
+      - run: {CI_QUALITY_COMMANDS[0]}
+      - run: {CI_QUALITY_COMMANDS[1]}
+      - run: {CI_QUALITY_COMMANDS[2]}
+""",
+        f"""jobs:
+  quality:
+    steps:
+      - run: {CI_QUALITY_COMMANDS[0]}
+      - run: {CI_QUALITY_COMMANDS[1]}
+      - run: {CI_QUALITY_COMMANDS[2]}
+        env:
+          PYTEST_ADDOPTS: --no-cov
+""",
+    ],
+)
+def test_ci_contract_rejects_coverage_environment_overrides(workflow: str) -> None:
+    with pytest.raises(AssertionError):
+        _assert_ci_quality_workflow(workflow)
+
+
+@pytest.mark.parametrize(
+    "addopts",
+    [
+        "--no-cov",
+        ["-q", "--cov-config=decoy.rc"],
+        "--cov-fail-under 0",
+        ["-p", "no:cov"],
+    ],
+)
+def test_pytest_addopts_contract_rejects_coverage_overrides(addopts: object) -> None:
+    config = {"tool": {"pytest": {"ini_options": {"addopts": addopts}}}}
+
+    with pytest.raises(AssertionError):
+        _assert_pytest_addopts_safe(config)
+
+
+def test_pytest_addopts_contract_allows_unrelated_options() -> None:
+    config = {"tool": {"pytest": {"ini_options": {"addopts": ["-q", "--strict-markers"]}}}}
+
+    _assert_pytest_addopts_safe(config)
+
+
+def test_yaml_loader_preserves_truthy_job_ids() -> None:
+    jobs = _workflow_jobs("jobs:\n  on: {}\n  true: {}\n")
+
+    assert set(jobs) == {"on", "true"}
+
+
+def test_ci_contract_accepts_truthy_job_id_without_key_collision() -> None:
+    workflow = f"""jobs:
+  on:
+    steps:
+      - run: {CI_QUALITY_COMMANDS[0]}
+      - run: {CI_QUALITY_COMMANDS[1]}
+      - run: {CI_QUALITY_COMMANDS[2]}
+"""
+
+    _assert_ci_quality_workflow(workflow)
+
+
+def test_ci_contract_rejects_quality_commands_split_across_truthy_job_ids() -> None:
+    workflow = f"""jobs:
+  on:
+    steps:
+      - run: {CI_QUALITY_COMMANDS[0]}
+  true:
+    steps:
+      - run: {CI_QUALITY_COMMANDS[1]}
+      - run: {CI_QUALITY_COMMANDS[2]}
+"""
+
+    with pytest.raises(AssertionError):
+        _assert_ci_quality_workflow(workflow)
+
+
+def test_explicit_coverage_config_ignores_higher_priority_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -317,10 +538,11 @@ partial_also = if debug:
 """,
         encoding="utf-8",
     )
+    monkeypatch.setenv("COVERAGE_RCFILE", str(tmp_path / ".coveragerc"))
     monkeypatch.chdir(tmp_path)
 
-    with pytest.raises(AssertionError):
-        _assert_effective_coverage_configuration(_load_effective_coverage_configuration())
+    coverage = _load_effective_coverage_configuration(tmp_path / "pyproject.toml")
+    _assert_effective_coverage_configuration(coverage)
 
 
 def test_readme_local_document_links_exist() -> None:

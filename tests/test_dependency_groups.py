@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import tomllib
 from pathlib import Path
@@ -32,9 +33,18 @@ def _assert_quality_tools_development_only(config: dict[str, Any]) -> None:
     assert not runtime_overlap, f"quality tools present in runtime dependencies: {runtime_overlap}"
 
 
-def _git_path_is_ignored(root: Path, candidate: str) -> bool:
+def _project_gitignore_ignores(root: Path, candidate: str) -> bool:
     result = subprocess.run(
-        ["git", "check-ignore", "--no-index", "--quiet", "--", candidate],
+        [
+            "git",
+            "-c",
+            f"core.excludesFile={os.devnull}",
+            "check-ignore",
+            "-v",
+            "--no-index",
+            "--",
+            candidate,
+        ],
         cwd=root,
         capture_output=True,
         text=True,
@@ -42,7 +52,17 @@ def _git_path_is_ignored(root: Path, candidate: str) -> bool:
         check=False,
     )
     assert result.returncode in {0, 1}, result.stderr
-    return result.returncode == 0
+    if result.returncode == 1:
+        return False
+
+    metadata, separator, ignored_path = result.stdout.rstrip("\r\n").partition("\t")
+    assert separator and ignored_path == candidate, result.stdout
+    source, line_number, pattern = metadata.rsplit(":", maxsplit=2)
+    assert line_number.isdigit(), result.stdout
+    source_path = Path(source)
+    if not source_path.is_absolute():
+        source_path = root / source_path
+    return not pattern.startswith("!") and source_path.resolve() == (root / ".gitignore").resolve()
 
 
 def test_erp_analysis_dependencies_are_not_default_runtime_dependencies() -> None:
@@ -71,8 +91,12 @@ def test_yaml_parser_is_development_only() -> None:
 
 
 def test_coverage_runtime_file_is_ignored() -> None:
-    assert _git_path_is_ignored(PROJECT_ROOT, ".coverage")
-    assert _git_path_is_ignored(PROJECT_ROOT, "htmlcov/.sentinel")
+    for candidate in (
+        ".coverage",
+        "htmlcov/index.html",
+        "htmlcov/assets/style.css",
+    ):
+        assert _project_gitignore_ignores(PROJECT_ROOT, candidate)
 
 
 @pytest.mark.parametrize(
@@ -120,4 +144,24 @@ def test_git_ignore_contract_rejects_negation_and_leading_whitespace(
     subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
     (tmp_path / ".gitignore").write_text(gitignore_text, encoding="utf-8")
 
-    assert not _git_path_is_ignored(tmp_path, candidate)
+    assert not _project_gitignore_ignores(tmp_path, candidate)
+
+
+@pytest.mark.parametrize("exclude_source", ["info", "global"])
+def test_project_ignore_contract_rejects_non_project_sources(
+    tmp_path: Path,
+    exclude_source: str,
+) -> None:
+    subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
+    if exclude_source == "info":
+        exclude_file = tmp_path / ".git" / "info" / "exclude"
+    else:
+        exclude_file = tmp_path / "global-ignore"
+        subprocess.run(
+            ["git", "config", "core.excludesFile", str(exclude_file)],
+            cwd=tmp_path,
+            check=True,
+        )
+    exclude_file.write_text("htmlcov/\n", encoding="utf-8")
+
+    assert not _project_gitignore_ignores(tmp_path, "htmlcov/.sentinel")

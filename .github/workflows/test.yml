@@ -28,6 +28,6 @@ jobs:
       - name: Lint
         run: uv run --all-groups ruff check src tests
       - name: Run tests with coverage
-        run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 -q
+        run: uv run --all-groups pytest --cov=work_order_process --cov-fail-under=70 --cov-config=pyproject.toml -q
       - name: Run tests
         run: uv run --all-groups pytest -q
