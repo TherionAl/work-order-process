@@ -1879,7 +1879,7 @@ ps -ef | grep -F work_order_process.daily_runner
 - 将部署的提交已经通过 CI。
 - `.venv` 使用 Python 3.14。
 - 只有一个调度器进程。
-- 已在第 8.2 节质量门槛末尾核对过 `git status --short`。
+- 服务器部署模板会先核对服务器工作树状态。
 
 ### 9.4 部署模板
 
@@ -1887,13 +1887,15 @@ ps -ef | grep -F work_order_process.daily_runner
 
 ```bash
 cd /opt/work_order_process
-git fetch --all --prune
+git status --short
 git pull --ff-only
 uv sync --locked --no-dev
 sudo systemctl restart work-order-daily.service
 sudo systemctl is-active work-order-daily.service
 sudo systemctl status work-order-daily.service --no-pager
 ```
+
+`git status --short` 的输出必须为空；有输出先人工处理，不得以本地第 8.2 节检查替代服务器状态。
 
 必须保证本地、远程仓库和服务器指向同一提交。生产同步只安装运行时依赖，不强制安装 dev
 质量工具；systemd 始终使用项目 `.venv` 中的 Python。

@@ -183,7 +183,6 @@ QUALITY_ONLY_COMMANDS = frozenset(
         "uv run work_order_process --help",
         "uv run erp-merge --help",
         "git diff --check",
-        "git status --short",
     }
 )
 
@@ -207,7 +206,7 @@ def _assert_exact_ordered_items(section: str, expected: tuple[str, ...]) -> None
 
 def _code_block_lines(section: str) -> list[str]:
     blocks = _fenced_code_blocks(section)
-    assert len(blocks) == 1, "expected one PowerShell or bash command block"
+    assert len(blocks) == 1, "expected one Markdown command block"
     return blocks[0]
 
 
@@ -239,10 +238,10 @@ def _fenced_code_blocks(text: str) -> list[list[str]]:
     active: list[str] | None = None
     for line in text.splitlines():
         if active is None:
-            if line in {"```powershell", "```bash"}:
+            if line.startswith("```"):
                 active = []
             continue
-        if line == "```":
+        if line.startswith("```"):
             blocks.append([command for command in active if command])
             active = None
         else:
@@ -362,10 +361,13 @@ def test_handover_guide_has_one_ordered_authoritative_quality_gate() -> None:
     _assert_no_quality_commands_outside_authority(text, QUALITY_GATE_COMMANDS)
 
 
-def test_quality_gate_helper_rejects_an_external_partial_block() -> None:
+@pytest.mark.parametrize(
+    "opening_fence", ("```powershell", "```bash", "```sh", "```shell", "```", "```python")
+)
+def test_quality_gate_helper_rejects_an_external_partial_block(opening_fence: str) -> None:
     with pytest.raises(AssertionError):
         _assert_no_quality_commands_outside_authority(
-            "```bash\nuv sync --locked --no-dev\nuv run work_order_process --help\n```\n",
+            f"{opening_fence}\nuv run work_order_process --help\n```\n",
             QUALITY_GATE_COMMANDS,
         )
 
@@ -373,7 +375,16 @@ def test_quality_gate_helper_rejects_an_external_partial_block() -> None:
 def test_production_template_syncs_runtime_dependencies_before_restart() -> None:
     guide_section = _markdown_section(_guide_text(), "9.4 部署模板", 3)
     commands = _code_block_lines(guide_section)
-    assert commands.index("git pull --ff-only") < commands.index("uv sync --locked --no-dev")
+    assert commands[:5] == [
+        "cd /opt/work_order_process",
+        "git status --short",
+        "git pull --ff-only",
+        "uv sync --locked --no-dev",
+        "sudo systemctl restart work-order-daily.service",
+    ]
+    assert "`git status --short` 的输出必须为空" in guide_section
+    assert "有输出先人工处理" in guide_section
+    assert "不得以本地第 8.2 节检查替代服务器状态" in guide_section
     assert commands.index("uv sync --locked --no-dev") < commands.index(
         "sudo systemctl restart work-order-daily.service"
     )
