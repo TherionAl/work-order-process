@@ -67,16 +67,16 @@ def handle(args: argparse.Namespace, settings: Settings, parser: argparse.Argume
 
     if args.command == "import-erp":
         if not args.erp_file:
-            raise ApiError("import-erp 需要传入 --erp-file。")
+            parser.error("import-erp requires --erp-file")
         report = import_erp_xlsx(settings.mysql, Path(args.erp_file))
         _print_erp_import_report(report)
         return True
 
     if args.command == "import-customer-account":
         if not args.customer_account_file:
-            raise ApiError("import-customer-account 需要传入 --customer-account-file。")
+            parser.error("import-customer-account requires --customer-account-file")
         if not args.create_date:
-            raise ApiError("import-customer-account 需要传入 --create-date。")
+            parser.error("import-customer-account requires --create-date")
         report = import_customer_account_xlsx(
             settings.mysql,
             Path(args.customer_account_file),

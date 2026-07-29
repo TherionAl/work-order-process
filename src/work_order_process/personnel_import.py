@@ -124,7 +124,8 @@ def upsert_personnel_rows(config: MySQLConfig, rows: Iterable[dict[str, Any]]) -
 
     import pymysql
 
-    rows = list(rows)
+    rows_by_employee = {row.get("employee_no"): row for row in rows}
+    rows = list(rows_by_employee.values())
     if not rows:
         return 0
 

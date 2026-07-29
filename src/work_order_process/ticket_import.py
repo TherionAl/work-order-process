@@ -622,18 +622,26 @@ def _commit_batch(
         batch_rows.append((main_row, custom_rows))
 
     try:
+        batch_imported = 0
+        batch_updated = 0
+        batch_skipped = 0
+        batch_custom_rows = 0
         with connection.cursor() as cursor:
             for main_row, custom_rows in batch_rows:
                 action = _upsert_ticket_detail(cursor, main_row, custom_rows)
                 if action == "updated":
-                    updated += 1
-                    custom_rows_total += len(custom_rows)
+                    batch_updated += 1
+                    batch_custom_rows += len(custom_rows)
                 elif action == "skipped":
-                    skipped += 1
+                    batch_skipped += 1
                 else:
-                    imported += 1
-                    custom_rows_total += len(custom_rows)
+                    batch_imported += 1
+                    batch_custom_rows += len(custom_rows)
         connection.commit()
+        imported += batch_imported
+        updated += batch_updated
+        skipped += batch_skipped
+        custom_rows_total += batch_custom_rows
     except Exception:
         _safe_rollback(connection)
         for main_row, custom_rows in batch_rows:

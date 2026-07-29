@@ -164,27 +164,51 @@ def test_personnel_import_preflights_then_invokes_only_personnel_domain_operatio
 
 
 @pytest.mark.parametrize(
-    ("argv", "message"),
+    ("argv", "required_argument"),
     [
-        (("import-erp",), "import-erp 需要传入 --erp-file"),
+        (("import-erp",), "--erp-file"),
+        (("import-customer-account",), "--customer-account-file"),
         (
             ("import-customer-account", "--customer-account-file", "account.xlsx"),
-            "import-customer-account 需要传入 --create-date",
+            "--create-date",
         ),
     ],
 )
-def test_import_file_and_date_validation_uses_public_api_error(
+def test_import_file_and_date_validation_uses_parser_error_before_domain_import(
     monkeypatch,
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
     argv: tuple[str, ...],
-    message: str,
+    required_argument: str,
 ) -> None:
     parser, args = _args(*argv)
-    monkeypatch.setattr(cli, "assert_schema_current", lambda _: None)
-    monkeypatch.setattr(imports.DataDictionary, "from_pdf", lambda _: object())
+    calls: list[str] = []
+    monkeypatch.setattr(
+        cli,
+        "assert_schema_current",
+        lambda _: calls.append("preflight"),
+    )
+    monkeypatch.setattr(
+        imports.DataDictionary,
+        "from_pdf",
+        lambda _: calls.append("dictionary") or object(),
+    )
+    monkeypatch.setattr(
+        imports,
+        "import_erp_xlsx",
+        lambda *_: pytest.fail("invalid arguments must not invoke ERP import"),
+    )
+    monkeypatch.setattr(
+        imports,
+        "import_customer_account_xlsx",
+        lambda *_: pytest.fail("invalid arguments must not invoke customer-account import"),
+    )
 
-    with pytest.raises(ApiError, match=message):
+    with pytest.raises(SystemExit, match="2"):
         imports.handle(args, _settings(tmp_path), parser)
+
+    assert calls == ["preflight", "dictionary"]
+    assert required_argument in capsys.readouterr().err
 
 
 def test_customer_account_import_passes_file_date_and_sheet_after_preflight(
@@ -600,6 +624,7 @@ def test_diagnostic_boundary_translates_project_errors_to_cli_exit_codes(
     message: str,
 ) -> None:
     parser, args = _args("probe")
+    printed: list[str] = []
 
     class FailingClient:
         def __init__(self, settings) -> None:
@@ -616,10 +641,16 @@ def test_diagnostic_boundary_translates_project_errors_to_cli_exit_codes(
 
     monkeypatch.setattr(diagnostics.DataDictionary, "from_pdf", lambda _: object())
     monkeypatch.setattr(diagnostics, "WorkOrderClient", FailingClient)
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda *values: printed.append(" ".join(str(value) for value in values)),
+    )
 
     with pytest.raises(SystemExit, match=exit_code) as caught:
         diagnostics.handle(args, _settings(tmp_path), parser)
 
     assert str(caught.value) == exit_code
-    # The handler prints only the project-level safe error, never a traceback or request payload.
-    assert message in str(error)
+    assert len(printed) == 1
+    assert message in printed[0]
+    assert "traceback" not in printed[0].lower()

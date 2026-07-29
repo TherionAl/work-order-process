@@ -80,7 +80,6 @@ class _Cursor:
         self.failure = failure
         self.sql = ""
         self.values: list[tuple[object, ...]] = []
-        self.rows_by_employee: dict[str, tuple[object, ...]] = {}
 
     def __enter__(self):
         return self
@@ -93,9 +92,7 @@ class _Cursor:
         self.values = values
         if self.failure:
             raise self.failure
-        for row in values:
-            self.rows_by_employee[str(row[0])] = row
-        return len(self.rows_by_employee)
+        return len(values)
 
 
 class _Connection:
@@ -161,17 +158,7 @@ def test_duplicate_employee_number_uses_upsert_and_keeps_latest_row(
 
     assert affected == 1
     assert "ON DUPLICATE KEY UPDATE" in cursor.sql
-    assert cursor.values == [
-        ("100012", "旧姓名", "云南", "客服", "一线组"),
-        ("100012", "新姓名", "云南", "主管", "二线组"),
-    ]
-    assert cursor.rows_by_employee["100012"] == (
-        "100012",
-        "新姓名",
-        "云南",
-        "主管",
-        "二线组",
-    )
+    assert cursor.values == [("100012", "新姓名", "云南", "主管", "二线组")]
     assert connection.events == ["enter", "cursor", "commit", "exit"]
     assert connect_calls == [
         {
