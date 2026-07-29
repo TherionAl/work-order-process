@@ -94,6 +94,16 @@ uv run work_order_process dictionary
 uv run work_order_process mysql-init
 ```
 
+已有数据库的结构检查和升级必须分开执行：`mysql-schema-status` 只读报告版本、待执行
+迁移和 checksum 漂移；`mysql-migrate` 才会显式执行 DDL。生产迁移前先完成可恢复备份并
+停止 daily runner，具体 8 步顺序见[项目接手手册](docs/project_handover_guide.md)和
+[生产运行说明](docs/production_operations.md)。
+
+```powershell
+uv run work_order_process mysql-schema-status
+uv run work_order_process mysql-migrate
+```
+
 导入单条工单：
 
 ```powershell
@@ -123,6 +133,12 @@ uv run work_order_process mysql-import-month --year 2025 --month 1 --max-workers
 ```powershell
 uv run work_order_process mysql-import-customers
 uv run work_order_process mysql-import-contacts
+```
+
+导入本地人员名单时必须显式传入 `.xls` 文件；该参数没有默认文件：
+
+```powershell
+uv run work_order_process mysql-import-personnel --personnel-file "人员信息名单.xls"
 ```
 
 提前创建未来分区：

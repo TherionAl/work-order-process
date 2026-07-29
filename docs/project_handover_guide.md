@@ -455,6 +455,12 @@ uv run --all-groups work_order_process mysql-schema-status
 uv run --all-groups work_order_process mysql-migrate
 ```
 
+三条命令的边界必须保持清晰：`mysql-schema-status` 是只读检查，不建表、不写版本；
+`mysql-init` 只建立当前基础结构并记录已满足基线，不应用待办升级；只有
+`mysql-migrate` 是升级已有库的显式迁移入口。生产迁移前必须先取得可恢复备份，并按
+第 9 章的 8 步流程停止和恢复 `daily_runner`；本手册的命令示例不表示任何生产数据库
+已经执行迁移。
+
 #### `mysql-drop-tables`（R3，危险）
 
 删除项目管理的工单基础表。CLI 不提供二次确认。
@@ -584,11 +590,12 @@ uv run --all-groups work_order_process mysql-import-contacts `
 
 #### `mysql-import-personnel`（R2）
 
-导入旧格式 `.xls` 人员名单并按 `employee_no` upsert。
+导入旧格式 `.xls` 人员名单并按 `employee_no` upsert。`--personnel-file` 没有默认值，
+必须明确传入本机文件，避免误把无关工作簿作为人员来源。
 
 ```powershell
 uv run --all-groups work_order_process mysql-import-personnel `
-  --personnel-file "D:\path\人员信息名单.xls"
+  --personnel-file "人员信息名单.xls"
 ```
 
 Excel 数字工号会规范化为无 `.0` 的字符串。详见
@@ -606,6 +613,8 @@ uv run --all-groups work_order_process import-customer-account `
 ```
 
 省略 `--sheet` 时取第一个工作表。执行后按 `create_date` 检查行数和关键字段空值。
+导入会先把已校验数据写入连接级临时 stage，再在一个事务中删除同日旧快照并发布 stage；
+stage 或校验失败会回滚，不能把失败理解为可接受的部分替换。
 
 #### `import-erp`（R2）
 
@@ -830,6 +839,14 @@ with WorkOrderClient(settings) as client:
 `_request()` 尝试配置的 HTTP 方法；`_json_or_empty()` 会修复接口文本中不合法的裸反斜杠
 再解析 JSON。不要在日志中打印完整响应，响应可能包含客户个人信息。
 
+#### 受控重试：`work_order_process.api_transport`
+
+`RetryPolicy` 默认最多尝试 3 次（首次请求也计入 3 次）。仅对 `429、502、503、504`
+和 `httpx.TransportError` 重试；其他 HTTP 状态直接返回给上层处理。响应带合法
+`Retry-After` 时优先遵从，否则使用有上限的指数退避和抖动。重试不是无限恢复机制：
+三次仍失败时应记录安全摘要、降低并发或 QPS，并按故障类型处理，不能无限循环或打印
+请求/响应正文。
+
 ### 6.4 工单解析和导入核心
 
 #### `work_order_process.resolver.resolve_ticket_detail_values`
@@ -845,6 +862,14 @@ with WorkOrderClient(settings) as client:
 - 流程：月度列表 → 对比 `source_updated_at` → 预取实体 → 并发取详情 → 批次事务写入。
 - 返回：总数、inserted、updated、skipped、failed 和失败 ID。
 - 失败：单批失败后有逐行定位逻辑；最终状态写 `sync_task_log`。
+
+#### 结构化失败与安全摘要：`work_order_process.import_failures`
+
+每条失败记录固定使用 `stage`、`record_id`、`source_row`、`error_type`、`safe_message`
+字段。`FailureCollector` 会分别统计总失败数和受限明细：结果中的 `failure_count` 是总数，
+`failures` 只保留上限内的脱敏摘要，`failures_truncated=true` 表示还有未展开失败。
+摘要会移除显式密钥、密码赋值、邮箱、手机号以及 JSON/请求/响应载荷，并限制长度；排障时
+应关联 `sync_task_log` 与安全的 `stage`/ID，不能把原始客户资料或凭据贴入日志。
 
 #### `work_order_process.mysql_storage.upsert_ticket_detail`
 
@@ -1732,8 +1757,19 @@ uv run --all-groups pytest `
 # 完整测试
 uv run --all-groups pytest -q
 
+# 最终质量门槛：保留阈值和 -q，并固定读取当前 pyproject 覆盖率配置
+uv run --all-groups pytest --cov=work_order_process --cov-config=pyproject.toml --cov-fail-under=70 -q
+
+# 静态检查
+uv run --all-groups ruff check src tests
+uv run --all-groups ruff format --check src tests
+
 # 编译检查
-uv run --all-groups python -m compileall -q src merge_erp_data.py main.py
+uv run --all-groups python -m compileall -q src tests
+
+# 命令帮助（不会访问真实 API 或数据库）
+uv run work_order_process --help
+uv run erp-merge --help
 
 # 空白和冲突标记检查
 git diff --check
@@ -1852,7 +1888,32 @@ sudo systemctl status work-order-daily.service --no-pager
 
 必须保证本地、远程仓库和服务器指向同一提交。
 
-### 9.5 发布后只读验收
+### 9.5 版本化结构迁移的 8 步顺序
+
+仅在已审批的生产变更窗口执行，且迁移前的备份必须能恢复。`mysql-schema-status` 是只读
+命令；`mysql-migrate` 是明确的 DDL 变更命令；`mysql-init` 只用于建立新库基础结构，
+不能代替已有库迁移。顺序如下：
+
+1. 部署一个已经通过验证的提交。
+2. 停止 `daily_runner`，确认没有并发调度器。
+3. 运行 `mysql-schema-status`。
+4. 审核待办版本、checksum 状态和迁移前备份状态。
+5. 明确运行 `mysql-migrate`。
+6. 再次运行 `mysql-schema-status`，必须显示 current 状态。
+7. 启动 `daily_runner`。
+8. 检查 `sync_task_log` 和服务日志。
+
+```bash
+sudo systemctl stop work-order-daily.service
+uv run work_order_process mysql-schema-status
+uv run work_order_process mysql-migrate
+uv run work_order_process mysql-schema-status
+sudo systemctl start work-order-daily.service
+```
+
+本段是受控发布流程，不声称仓库已经对真实生产环境执行过迁移、备份或服务启停。
+
+### 9.6 发布后只读验收
 
 ```bash
 journalctl -u work-order-daily.service -n 100 --no-pager
@@ -1871,7 +1932,7 @@ LIMIT 20;
 
 不要只依据“Scheduler started”判断数据成功；它只证明调度器进程启动。
 
-### 9.6 日志
+### 9.7 日志
 
 应用把 `httpx` 降到 WARNING，常规日志只记录任务摘要。默认文件：
 
@@ -1881,7 +1942,7 @@ LIMIT 20;
 
 logrotate 每日轮转、压缩并保留 14 份。排障时同时看文件日志和 systemd journal。
 
-### 9.7 备份
+### 9.8 备份
 
 备份脚本从 `/etc/work-order-process/mysql-backup.cnf` 读取凭据，避免密码出现在进程参数。
 默认写入 `/var/backups/work-order-process`，保留 14 天。
@@ -1895,7 +1956,7 @@ gzip -t /var/backups/work-order-process/work_order_datalake_*.sql.gz
 
 `gzip -t` 只证明压缩文件未损坏。必须定期恢复到隔离数据库，核对表数、关键行数和查询。
 
-### 9.8 回滚原则
+### 9.9 回滚原则
 
 代码回滚：
 

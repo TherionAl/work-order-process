@@ -53,6 +53,37 @@ journalctl -u work-order-daily.service -n 100 --no-pager
 
 数据库侧检查最近的 `sync_task_log`，不能只以 APScheduler 的 executed successfully 作为成功依据。
 
+## 版本化结构迁移
+
+`mysql-schema-status` 只读报告 `schema_version`、待办版本和 checksum 漂移；它不建表、
+不写版本。`mysql-init` 只用于新库的基础结构和已满足基线记录，不能替代已有库升级；
+`mysql-migrate` 才是显式执行待办 DDL 的入口。以下是经批准、备份可恢复时才可使用的 8 步
+生产顺序，本仓库不因此声称已在真实生产库执行：
+
+1. 部署一个已验证的提交。
+2. 停止 daily_runner，确认不存在并发调度器。
+3. 运行 `mysql-schema-status`。
+4. 审核待办版本、checksum 与迁移前备份状态。
+5. 明确运行 `mysql-migrate`。
+6. 再次运行 `mysql-schema-status` 并要求 current 状态。
+7. 启动 daily_runner。
+8. 检查 `sync_task_log` 和服务日志。
+
+迁移窗口中应使用与服务相同的已部署提交和虚拟环境；先执行已有备份流程并确认恢复演练，
+再停止服务：
+
+```bash
+systemctl stop work-order-daily.service
+cd /opt/work_order_process
+uv run work_order_process mysql-schema-status
+uv run work_order_process mysql-migrate
+uv run work_order_process mysql-schema-status
+systemctl start work-order-daily.service
+```
+
+若迁移失败，保持 daily runner 停止，保留错误和备份证据；不要以重启服务掩盖未确认的
+schema 状态。
+
 ## 数据库备份
 
 备份组件：

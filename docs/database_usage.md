@@ -63,6 +63,15 @@ erDiagram
 `contract_code = contract_id` 和 `item_code`；只有来源缺少稳定 ID 时才使用规范化后的
 客户名称、项目名称等辅助字段，并应单独统计未匹配和一对多结果。
 
+### 客户台账的 stage/publish 原子替换
+
+`import-customer-account` 不直接将工作簿逐行写入正式 `customer_account`。它先创建连接级
+临时表 `customer_account_import_stage`，严格解析并校验全部行，再核对 stage 行数。只有
+stage 完整后，发布事务才删除指定 `create_date` 的旧快照、插入 stage 内容并复核已发布行数。
+任一 stage、校验或发布步骤失败都会回滚，因此同日客户台账保留旧快照，不会出现部分替换。
+命令报告的失败应使用结构化安全摘要（`stage`、`error_type`、`safe_message` 等），不要从
+日志或报告复制客户明细、原始 Excel 内容或凭据。
+
 ## 4. ERP 快照加工
 
 输入为项目约定的新 ERP 和旧 ERP 工作簿。`merge_erp_data.py` 调用

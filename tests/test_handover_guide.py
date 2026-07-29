@@ -96,3 +96,34 @@ def test_handover_guide_local_links_exist() -> None:
     assert local_links
     missing = sorted(link for link in local_links if not (GUIDE_PATH.parent / link).exists())
     assert not missing, missing
+
+
+def test_long_lived_docs_cover_compatibility_hardening_contract() -> None:
+    """Keep operational boundaries and compatibility seams discoverable."""
+    documents = {
+        "README.md": ("mysql-schema-status", "mysql-migrate"),
+        "docs/project_handover_guide.md": (
+            "`Retry-After`",
+            "429、502、503、504",
+            "3 次",
+            "failures_truncated",
+            "--cov-config=pyproject.toml",
+            "customers-source",
+            "contacts-source",
+            "--personnel-file",
+        ),
+        "docs/production_operations.md": (
+            "停止 daily_runner",
+            "mysql-schema-status",
+            "mysql-migrate",
+            "8 步",
+        ),
+        "docs/database_usage.md": (
+            "customer_account_import_stage",
+            "原子替换",
+        ),
+    }
+    for relative_path, required_terms in documents.items():
+        text = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+        missing = [term for term in required_terms if term not in text]
+        assert not missing, f"{relative_path}: {missing}"
