@@ -11,6 +11,38 @@ from work_order_process.cli import build_parser, dispatch_command
 from work_order_process.cli_commands import database, diagnostics, exports, imports
 
 
+EXPECTED_COMMANDS = frozenset(
+    {
+        "run",
+        "monthly-tickets",
+        "template-samples",
+        "mysql-init",
+        "mysql-schema-status",
+        "mysql-migrate",
+        "mysql-drop-tables",
+        "mysql-create-analysis-views",
+        "mysql-import-ticket",
+        "mysql-import-month",
+        "mysql-import-month-v1",
+        "mysql-import-year",
+        "mysql-import-customers",
+        "mysql-import-contacts",
+        "mysql-probe-customers",
+        "mysql-probe-contacts",
+        "mysql-import-personnel",
+        "mysql-add-partitions",
+        "mysql-sync-log",
+        "import-erp",
+        "import-customer-account",
+        "generate-revenue-summary",
+        "metric-month",
+        "metric-ticket",
+        "probe",
+        "dictionary",
+    }
+)
+
+
 def _settings() -> SimpleNamespace:
     return SimpleNamespace()
 
@@ -37,21 +69,45 @@ def test_personnel_import_requires_explicit_file(capsys: pytest.CaptureFixture[s
     assert "--personnel-file" in capsys.readouterr().err
 
 
+def _assert_command_contract(
+    parser_commands: set[str],
+    command_sets: tuple[frozenset[str], ...],
+) -> None:
+    handler_commands = set().union(*command_sets)
+
+    assert parser_commands == EXPECTED_COMMANDS
+    assert handler_commands == EXPECTED_COMMANDS
+    assert sum(len(command_set) for command_set in command_sets) == len(
+        handler_commands
+    )
+
+
+def test_command_contract_rejects_a_missing_base_command() -> None:
+    with pytest.raises(AssertionError):
+        _assert_command_contract(
+            set(EXPECTED_COMMANDS - {"mysql-import-month-v1"}),
+            (
+                database.COMMANDS,
+                imports.COMMANDS,
+                exports.COMMANDS,
+                diagnostics.COMMANDS,
+            ),
+        )
+
+
 def test_parser_commands_match_exactly_one_handler() -> None:
     parser = build_parser()
     command_action = next(
         action for action in parser._actions if action.dest == "command"
     )
-    command_sets = (
+    _assert_command_contract(
+        set(command_action.choices),
+        (
         database.COMMANDS,
         imports.COMMANDS,
         exports.COMMANDS,
         diagnostics.COMMANDS,
-    )
-
-    assert set(command_action.choices) == set().union(*command_sets)
-    assert sum(len(command_set) for command_set in command_sets) == len(
-        set().union(*command_sets)
+        ),
     )
 
 
