@@ -16,6 +16,8 @@ output/
 logs/
 backups/
 .pytest_cache/
+.coverage
+htmlcov/
 *.parsed.json
 
 dump.sql.gz
