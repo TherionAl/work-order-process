@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+import re
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -145,6 +147,27 @@ def test_failed_migration_is_not_recorded() -> None:
     assert connection.rollbacks == 1
 
 
+def test_migration_that_remains_unsatisfied_is_not_recorded() -> None:
+    connection = MigrationConnection(schema_is_satisfied=False)
+    migration = Migration(
+        version=1,
+        name="incomplete_migration",
+        checksum="a" * 64,
+        is_satisfied=lambda cursor, database: False,
+        apply=lambda cursor, database: None,
+    )
+
+    with pytest.raises(SchemaMigrationError, match="not satisfied"):
+        apply_pending_migrations(
+            connection,
+            database="work_order_datalake",
+            migrations=(migration,),
+        )
+
+    assert connection.recorded_versions == []
+    assert connection.rollbacks == 1
+
+
 def test_rerun_reconciles_auto_committed_ddl_before_recording_version() -> None:
     connection = MigrationConnection(apply_error=RuntimeError("record unavailable"))
     migration = _migration(1)
@@ -202,7 +225,7 @@ class InformationSchemaCursor:
         return self.result[0] if self.result else None
 
 
-def test_current_schema_satisfaction_detects_missing_required_column() -> None:
+def test_partial_legacy_schema_is_not_mistaken_for_satisfied_baseline() -> None:
     tables = {
         "ticket_detail_main",
         "ticket_detail_custom_fields",
@@ -222,10 +245,96 @@ def test_current_schema_satisfaction_detects_missing_required_column() -> None:
     }
     cursor = InformationSchemaCursor(tables=tables, columns=columns)
 
-    assert v0001_current_schema.is_satisfied(cursor, "warehouse")
-
-    columns["contacts"].remove("fixed_phone")
     assert not v0001_current_schema.is_satisfied(cursor, "warehouse")
+
+
+def _frozen_v1_columns() -> dict[str, set[str]]:
+    columns: dict[str, set[str]] = {}
+    ignored = {"PRIMARY", "UNIQUE", "KEY", "INDEX", "PARTITION"}
+    for table, statement in v0001_current_schema._TABLE_DDLS:
+        table_columns = set()
+        for line in statement.splitlines():
+            match = re.match(
+                r"\s{2}`?([A-Za-z_][A-Za-z0-9_]*)`?\s+",
+                line,
+            )
+            if match and match.group(1).upper() not in ignored:
+                table_columns.add(match.group(1))
+        columns[table] = table_columns
+    for table, alterations in v0001_current_schema._COMPATIBILITY_ALTERS.items():
+        columns[table].update(column for column, _ in alterations)
+    return columns
+
+
+@pytest.mark.parametrize(
+    ("table", "missing_column"),
+    [
+        ("ticket_detail_main", "subject"),
+        ("ticket_detail_custom_fields", "field_value"),
+        ("customers", "customer_name"),
+        ("contacts", "contact_name"),
+        ("sync_task_log", "task_type"),
+        ("customer_history", "customer_name"),
+        ("contact_history", "contact_name"),
+        ("customer_contact_relation_history", "customer_id"),
+        ("api_sync_batch", "status"),
+        ("api_raw_record", "payload_json"),
+    ],
+)
+def test_v1_requires_key_write_column_from_every_baseline_table(
+    table: str,
+    missing_column: str,
+) -> None:
+    complete_columns = _frozen_v1_columns()
+    complete_cursor = InformationSchemaCursor(
+        tables=set(complete_columns),
+        columns=complete_columns,
+    )
+    assert v0001_current_schema.is_satisfied(complete_cursor, "warehouse")
+
+    incomplete_columns = {
+        name: set(columns)
+        for name, columns in complete_columns.items()
+    }
+    incomplete_columns[table].remove(missing_column)
+    incomplete_cursor = InformationSchemaCursor(
+        tables=set(incomplete_columns),
+        columns=incomplete_columns,
+    )
+
+    assert not v0001_current_schema.is_satisfied(
+        incomplete_cursor,
+        "warehouse",
+    )
+
+
+def test_external_runtime_ddl_cannot_change_frozen_v1_behavior_or_checksum(
+    monkeypatch,
+) -> None:
+    from work_order_process import mysql_storage
+
+    baseline_cursor = InformationSchemaCursor(tables=set(), columns={})
+    v0001_current_schema.apply(baseline_cursor, "warehouse")
+    baseline_statements = list(baseline_cursor.statements)
+    baseline_checksum = discover_migrations()[0].checksum
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                mysql_storage,
+                "TICKET_DETAIL_MAIN_DDL",
+                "CREATE TABLE IF NOT EXISTS tampered_runtime_table (id INT)",
+            )
+            importlib.reload(v0001_current_schema)
+            mutated_cursor = InformationSchemaCursor(tables=set(), columns={})
+            v0001_current_schema.apply(mutated_cursor, "warehouse")
+            mutated_statements = list(mutated_cursor.statements)
+            mutated_checksum = discover_migrations()[0].checksum
+    finally:
+        importlib.reload(v0001_current_schema)
+
+    assert mutated_statements == baseline_statements
+    assert mutated_checksum == baseline_checksum
 
 
 def test_current_schema_apply_executes_base_table_and_compatibility_ddl() -> None:

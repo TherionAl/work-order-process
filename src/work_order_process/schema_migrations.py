@@ -156,6 +156,10 @@ def apply_pending_migrations(
             try:
                 if not migration.is_satisfied(cursor, database):
                     migration.apply(cursor, database)
+                    if not migration.is_satisfied(cursor, database):
+                        raise RuntimeError(
+                            "schema is not satisfied after apply"
+                        )
                 cursor.execute(
                     "INSERT INTO schema_version (version, name, checksum) "
                     "VALUES (%s, %s, %s)",
