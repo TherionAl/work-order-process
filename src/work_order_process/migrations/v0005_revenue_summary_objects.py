@@ -9,8 +9,8 @@ from typing import Any
 VERSION = 5
 NAME = "revenue_summary_objects"
 
-# Exact SQL bytes are frozen here so the source checksum covers every CREATE
-# statement, independent of mutable runtime SQL files.
+# Exact table SQL and view-template bytes are frozen here so the source checksum
+# covers every CREATE statement, independent of mutable runtime SQL files.
 _TABLE_DDL_B64 = (
     "Q1JFQVRFIFRBQkxFIElGIE5PVCBFWElTVFMgb3BzX3NlcnZpY2VfcmV2ZW51ZV9tb250aGx5ICgNCiAgc3RhdF95"
     "ZWFyIFNNQUxMSU5UIE5PVCBOVUxMIENPTU1FTlQgJ+e7n+iuoeW5tCcsDQogIHN0YXRfbW9udGggVElOWUlOVCBO"
@@ -86,7 +86,19 @@ _VIEW_DDL_B64 = (
 )
 
 _TABLE_DDL = base64.b64decode(_TABLE_DDL_B64).decode("utf-8")
-_VIEW_DDL = base64.b64decode(_VIEW_DDL_B64).decode("utf-8")
+_VIEW_TEMPLATE_DDL = base64.b64decode(_VIEW_DDL_B64).decode("utf-8")
+_VIEW_MARKER = "work_order_process:v0005:revenue_summary_objects"
+_VIEW_DDL = _VIEW_TEMPLATE_DDL.replace(
+    "1 AS sort_order",
+    f"1 + 0 * CHAR_LENGTH('{_VIEW_MARKER}') AS sort_order",
+    1,
+).replace(
+    "0 AS sort_order",
+    f"0 + 0 * CHAR_LENGTH('{_VIEW_MARKER}') AS sort_order",
+    1,
+)
+if _VIEW_DDL.count(_VIEW_MARKER) != 2:
+    raise RuntimeError("frozen revenue view template does not accept the v5 marker")
 _TABLE = "ops_service_revenue_monthly"
 _VIEW = "v_ops_service_revenue_monthly_with_total"
 _MONEY_COLUMNS = frozenset(
@@ -120,6 +132,30 @@ def _required_columns() -> frozenset[str]:
 _REQUIRED_COLUMNS = _required_columns()
 
 
+def _required_indexes() -> dict[str, tuple[int, tuple[str, ...]]]:
+    indexes: dict[str, tuple[int, tuple[str, ...]]] = {}
+    for line in _TABLE_DDL.splitlines():
+        match = re.match(
+            r"\s{2}(PRIMARY KEY|UNIQUE KEY|KEY|INDEX)"
+            r"(?:\s+`?([A-Za-z_][A-Za-z0-9_]*)`?)?\s*\(([^)]+)\)",
+            line,
+            re.IGNORECASE,
+        )
+        if match is None:
+            continue
+        kind, name, raw_columns = match.groups()
+        index_name = "PRIMARY" if kind.upper() == "PRIMARY KEY" else str(name)
+        non_unique = 0 if kind.upper() in {"PRIMARY KEY", "UNIQUE KEY"} else 1
+        columns = tuple(
+            value.strip().strip("`").split("(", maxsplit=1)[0] for value in raw_columns.split(",")
+        )
+        indexes[index_name] = (non_unique, columns)
+    return indexes
+
+
+_REQUIRED_INDEXES = _required_indexes()
+
+
 def _column_definition(column: str) -> str:
     match = re.search(
         rf"^\s{{2}}`?{re.escape(column)}`?\s+(.+?)(?:,)?$",
@@ -145,13 +181,49 @@ def _metadata(cursor: Any, database: str) -> list[tuple[str, int | None, int]]:
     ]
 
 
-def _view_exists(cursor: Any, database: str) -> bool:
+def _existing_indexes(
+    cursor: Any,
+    database: str,
+) -> dict[str, tuple[int, tuple[str, ...]]]:
     cursor.execute(
-        "SELECT table_name FROM information_schema.views "
+        "SELECT index_name, non_unique, seq_in_index, column_name "
+        "FROM information_schema.statistics "
+        "WHERE table_schema = %s AND table_name = %s "
+        "ORDER BY index_name, seq_in_index",
+        (database, _TABLE),
+    )
+    grouped: dict[str, tuple[int, list[tuple[int, str]]]] = {}
+    for name, non_unique, sequence, column in cursor.fetchall():
+        index_name = str(name)
+        if index_name not in grouped:
+            grouped[index_name] = (int(non_unique), [])
+        grouped[index_name][1].append((int(sequence), str(column)))
+    return {
+        name: (
+            non_unique,
+            tuple(column for _, column in sorted(columns)),
+        )
+        for name, (non_unique, columns) in grouped.items()
+    }
+
+
+def _index_issues(cursor: Any, database: str) -> list[str]:
+    actual = _existing_indexes(cursor, database)
+    return [
+        f"index {name} expected={signature} actual={actual.get(name)}"
+        for name, signature in _REQUIRED_INDEXES.items()
+        if actual.get(name) != signature
+    ]
+
+
+def _view_is_current(cursor: Any, database: str) -> bool:
+    cursor.execute(
+        "SELECT view_definition FROM information_schema.views "
         "WHERE table_schema = %s AND table_name = %s",
         (database, _VIEW),
     )
-    return cursor.fetchone() is not None
+    result = cursor.fetchone()
+    return bool(result and result[0] and _VIEW_MARKER in str(result[0]))
 
 
 def is_satisfied(cursor: Any, database: str) -> bool:
@@ -166,7 +238,9 @@ def is_satisfied(cursor: Any, database: str) -> bool:
         return False
     if tuple(columns[-3:]) != _REQUIRED_TAIL:
         return False
-    return _view_exists(cursor, database)
+    if _index_issues(cursor, database):
+        return False
+    return _view_is_current(cursor, database)
 
 
 def apply(cursor: Any, database: str) -> None:
@@ -181,6 +255,12 @@ def apply(cursor: Any, database: str) -> None:
     if missing:
         raise RuntimeError(
             f"{_TABLE} is missing required columns {missing}; manual repair is required"
+        )
+    index_issues = _index_issues(cursor, database)
+    if index_issues:
+        raise RuntimeError(
+            f"{_TABLE} has incompatible functional structure: "
+            f"{'; '.join(index_issues)}; manual repair is required"
         )
 
     scales = {name: scale for name, scale, _ in metadata}

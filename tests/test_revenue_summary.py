@@ -451,8 +451,71 @@ def test_revenue_total_view_has_dynamic_total_row_and_sort_order() -> None:
 
     assert "UNION ALL" in view_sql
     assert "'合计' AS sales_platform" in view_sql
-    assert "0 AS sort_order" in view_sql
+    assert view_sql.count("AS sort_order") == 2
+    assert "work_order_process:v0005:revenue_summary_objects" in view_sql
     assert "ROUND(SUM(revenue_target), 0)" in view_sql
+
+
+def test_compatibility_schema_helper_keeps_v5_view_marker(monkeypatch) -> None:
+    marker = "work_order_process:v0005:revenue_summary_objects"
+
+    class Cursor:
+        def __init__(self) -> None:
+            self.statement = ""
+            self.statements: list[str] = []
+
+        def __enter__(self) -> Cursor:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def execute(self, statement: str) -> None:
+            self.statement = statement
+            self.statements.append(statement)
+
+        def fetchall(self) -> list[tuple[object, ...]]:
+            if self.statement.startswith("SHOW COLUMNS"):
+                return [
+                    *((column,) for column in PERSISTED_COLUMNS),
+                    ("created_at",),
+                    ("updated_at",),
+                ]
+            if "numeric_scale" in self.statement:
+                return [(column, 0) for column in revenue_summary.MONEY_COLUMN_COMMENTS]
+            return []
+
+    class Connection:
+        def __init__(self) -> None:
+            self.cursor_instance = Cursor()
+
+        def __enter__(self) -> Connection:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def cursor(self) -> Cursor:
+            return self.cursor_instance
+
+    connection = Connection()
+    monkeypatch.setitem(
+        sys.modules,
+        "pymysql",
+        SimpleNamespace(connect=lambda **kwargs: connection),
+    )
+
+    revenue_summary.ensure_revenue_summary_schema(
+        SimpleNamespace(
+            host="db",
+            port=3306,
+            user="user",
+            password="secret",
+            database="warehouse",
+        )
+    )
+
+    assert marker in connection.cursor_instance.statements[-1]
 
 
 def test_revenue_amounts_round_half_up_to_integer_and_export_without_decimals(

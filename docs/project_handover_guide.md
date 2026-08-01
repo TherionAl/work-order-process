@@ -1257,18 +1257,28 @@ ERP 发布总控：
 - `work_order_process.migrations.v0002_erp_allocation_columns.apply`：只增加缺失的年度分摊列。
 - `work_order_process.migrations.v0003_auxiliary_snapshot_tables._required_columns`：从冻结 DDL 提取写入所需列。
 - `work_order_process.migrations.v0003_auxiliary_snapshot_tables._existing_columns`：只读检查 ERP 或客户台账列。
-- `work_order_process.migrations.v0003_auxiliary_snapshot_tables.is_satisfied`：检查两个快照表完整结构。
-- `work_order_process.migrations.v0003_auxiliary_snapshot_tables.apply`：创建缺失快照表；部分表明确要求人工修复。
+- `work_order_process.migrations.v0003_auxiliary_snapshot_tables._required_indexes`：从冻结 DDL 提取主键、唯一键和关键索引签名。
+- `work_order_process.migrations.v0003_auxiliary_snapshot_tables._existing_indexes`：从 `information_schema.statistics` 读取真实索引签名。
+- `work_order_process.migrations.v0003_auxiliary_snapshot_tables._partitions`：只读检查 `p_future/MAXVALUE` 分区。
+- `work_order_process.migrations.v0003_auxiliary_snapshot_tables._structure_issues`：汇总索引与分区结构差异。
+- `work_order_process.migrations.v0003_auxiliary_snapshot_tables.is_satisfied`：检查两个快照表的列、索引和分区。
+- `work_order_process.migrations.v0003_auxiliary_snapshot_tables.apply`：创建缺失快照表；既有表结构不完整时拒绝并要求人工修复，不自动增加唯一键。
 - `work_order_process.migrations.v0004_personnel_table._required_columns`：从冻结 DDL 提取人员写入列。
 - `work_order_process.migrations.v0004_personnel_table._existing_columns`：只读检查人员表列。
-- `work_order_process.migrations.v0004_personnel_table.is_satisfied`：检查人员表完整结构。
+- `work_order_process.migrations.v0004_personnel_table._required_indexes`：从冻结 DDL 提取人员表索引签名。
+- `work_order_process.migrations.v0004_personnel_table._existing_indexes`：只读检查人员表真实索引。
+- `work_order_process.migrations.v0004_personnel_table._index_issues`：报告缺失或不匹配的主键/索引。
+- `work_order_process.migrations.v0004_personnel_table.is_satisfied`：检查人员表列和功能性索引。
 - `work_order_process.migrations.v0004_personnel_table.apply`：创建缺失人员表；部分表明确要求人工修复。
 - `work_order_process.migrations.v0005_revenue_summary_objects._required_columns`：从冻结 DDL 提取营收写入列。
+- `work_order_process.migrations.v0005_revenue_summary_objects._required_indexes`：从冻结 DDL 提取营收复合主键和索引签名。
 - `work_order_process.migrations.v0005_revenue_summary_objects._column_definition`：读取冻结列定义用于安全校正。
 - `work_order_process.migrations.v0005_revenue_summary_objects._metadata`：只读取得营收列精度和顺序。
-- `work_order_process.migrations.v0005_revenue_summary_objects._view_exists`：只读检查合计视图。
-- `work_order_process.migrations.v0005_revenue_summary_objects.is_satisfied`：检查营收表、金额精度、列序和视图。
-- `work_order_process.migrations.v0005_revenue_summary_objects.apply`：建缺表/视图并迁移已知旧金额精度和列序。
+- `work_order_process.migrations.v0005_revenue_summary_objects._existing_indexes`：只读检查营收真实索引。
+- `work_order_process.migrations.v0005_revenue_summary_objects._index_issues`：报告复合主键或索引差异。
+- `work_order_process.migrations.v0005_revenue_summary_objects._view_is_current`：通过冻结在视图等价表达式中的稳定 marker 识别当前定义，不比较脆弱的原始 `SHOW CREATE VIEW` 全串。
+- `work_order_process.migrations.v0005_revenue_summary_objects.is_satisfied`：检查营收表、金额精度、列序、索引和带 marker 的视图。
+- `work_order_process.migrations.v0005_revenue_summary_objects.apply`：建缺表/视图并迁移已知旧金额精度和列序；既有表缺键时拒绝人工修复。
 - `work_order_process.mysql_storage._merge_failure_collectors`：合并有界的结构化失败收集器。
 - `work_order_process.mysql_storage._merge_failure_payload`：合并批次报告中的安全失败明细。
 - `work_order_process.mysql_storage._safe_rollback`：连接可用时回滚。

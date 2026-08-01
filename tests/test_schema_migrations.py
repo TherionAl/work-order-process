@@ -60,7 +60,10 @@ class ManagedObjectCursor:
     def __init__(self) -> None:
         self.columns: dict[str, list[str]] = {}
         self.scales: dict[tuple[str, str], int | None] = {}
+        self.indexes: dict[str, dict[str, tuple[int, tuple[str, ...]]]] = {}
+        self.partitions: dict[str, dict[str, str]] = {}
         self.views: set[str] = set()
+        self.view_definitions: dict[str, str] = {}
         self.statements: list[str] = []
         self.result: list[tuple[object, ...]] = []
 
@@ -79,10 +82,28 @@ class ManagedObjectCursor:
             else:
                 self.result = [(name,) for name in names]
             return
+        if "information_schema.statistics" in lowered:
+            assert isinstance(params, tuple)
+            table = str(params[-1])
+            self.result = [
+                (index_name, non_unique, position, column)
+                for index_name, (non_unique, columns) in sorted(self.indexes.get(table, {}).items())
+                for position, column in enumerate(columns, start=1)
+            ]
+            return
+        if "information_schema.partitions" in lowered:
+            assert isinstance(params, tuple)
+            table = str(params[-1])
+            self.result = list(self.partitions.get(table, {}).items())
+            return
         if "information_schema.views" in lowered:
             assert isinstance(params, tuple)
             view = str(params[-1])
-            self.result = [(view,)] if view in self.views else []
+            self.result = (
+                [(self.view_definitions.get(view, "stale view definition"),)]
+                if view in self.views
+                else []
+            )
             return
         create_table = re.search(
             r"CREATE TABLE IF NOT EXISTS\s+`?([A-Za-z_][A-Za-z0-9_]*)`?",
@@ -102,6 +123,36 @@ class ManagedObjectCursor:
                         scale = re.search(r"DECIMAL\(\d+,(\d+)\)", line, re.IGNORECASE)
                         self.scales[(table, name)] = int(scale.group(1)) if scale else None
                 self.columns[table] = names
+                indexes: dict[str, tuple[int, tuple[str, ...]]] = {}
+                for line in statement.splitlines():
+                    index_match = re.match(
+                        r"\s{2}(PRIMARY KEY|UNIQUE KEY|KEY|INDEX)(?:\s+`?([A-Za-z_][A-Za-z0-9_]*)`?)?\s*\(([^)]+)\)",
+                        line,
+                        re.IGNORECASE,
+                    )
+                    if index_match is None:
+                        continue
+                    kind, name, raw_columns = index_match.groups()
+                    index_name = "PRIMARY" if kind.upper() == "PRIMARY KEY" else str(name)
+                    non_unique = 0 if kind.upper() in {"PRIMARY KEY", "UNIQUE KEY"} else 1
+                    index_columns = tuple(
+                        value.strip().strip("`").split("(", maxsplit=1)[0]
+                        for value in raw_columns.split(",")
+                    )
+                    indexes[index_name] = (non_unique, index_columns)
+                self.indexes[table] = indexes
+                self.partitions[table] = {
+                    match.group(1): match.group(2).upper()
+                    for line in statement.splitlines()
+                    if (
+                        match := re.match(
+                            r"\s{2}PARTITION\s+([A-Za-z_][A-Za-z0-9_]*)\s+"
+                            r"VALUES LESS THAN\s*\(([^)]+)\)",
+                            line,
+                            re.IGNORECASE,
+                        )
+                    )
+                }
             self.result = []
             return
         create_view = re.search(
@@ -110,7 +161,9 @@ class ManagedObjectCursor:
             re.IGNORECASE,
         )
         if create_view:
-            self.views.add(create_view.group(1))
+            view = create_view.group(1)
+            self.views.add(view)
+            self.view_definitions[view] = statement
             self.result = []
             return
         if lowered.startswith("alter table ops_service_revenue_monthly"):
@@ -199,6 +252,7 @@ def test_revenue_migration_safely_corrects_legacy_scale_order_and_view() -> None
     cursor = ManagedObjectCursor()
     migration.apply(cursor, "warehouse")
     cursor.views.clear()
+    cursor.view_definitions.clear()
     money_column = "recognized_revenue"
     cursor.scales[("ops_service_revenue_monthly", money_column)] = 2
     names = cursor.columns["ops_service_revenue_monthly"]
@@ -220,6 +274,59 @@ def test_revenue_migration_safely_corrects_legacy_scale_order_and_view() -> None
     )
     assert any("MODIFY COLUMN erp_create_date" in statement for statement in cursor.statements)
     assert any("CREATE OR REPLACE VIEW" in statement for statement in cursor.statements)
+
+
+@pytest.mark.parametrize(
+    ("version", "table", "missing_index"),
+    (
+        (3, "erp_data", "uk_snapshot_line"),
+        (3, "erp_data", "PRIMARY"),
+        (3, "customer_account", "PRIMARY"),
+        (4, "personnel", "PRIMARY"),
+        (5, "ops_service_revenue_monthly", "PRIMARY"),
+        (5, "ops_service_revenue_monthly", "idx_erp_create_date"),
+    ),
+)
+def test_migration_rejects_missing_functional_index(
+    version: int,
+    table: str,
+    missing_index: str,
+) -> None:
+    migration = _discovered_migration(version)
+    cursor = ManagedObjectCursor()
+    migration.apply(cursor, "warehouse")
+    cursor.indexes[table].pop(missing_index)
+
+    assert not migration.is_satisfied(cursor, "warehouse")
+    with pytest.raises(RuntimeError, match=r"index.*manual repair"):
+        migration.apply(cursor, "warehouse")
+
+
+@pytest.mark.parametrize("table", ("erp_data", "customer_account"))
+def test_auxiliary_migration_rejects_missing_maxvalue_partition(table: str) -> None:
+    migration = _discovered_migration(3)
+    cursor = ManagedObjectCursor()
+    migration.apply(cursor, "warehouse")
+    cursor.partitions[table].pop("p_future")
+
+    assert not migration.is_satisfied(cursor, "warehouse")
+    with pytest.raises(RuntimeError, match=r"p_future.*MAXVALUE.*manual repair"):
+        migration.apply(cursor, "warehouse")
+
+
+def test_revenue_migration_replaces_same_name_stale_view_with_stable_marker() -> None:
+    migration = _discovered_migration(5)
+    module = importlib.import_module("work_order_process.migrations.v0005_revenue_summary_objects")
+    cursor = ManagedObjectCursor()
+    migration.apply(cursor, "warehouse")
+    view = "v_ops_service_revenue_monthly_with_total"
+    cursor.view_definitions[view] = "SELECT 1 AS sort_order"
+
+    assert not migration.is_satisfied(cursor, "warehouse")
+    migration.apply(cursor, "warehouse")
+
+    assert migration.is_satisfied(cursor, "warehouse")
+    assert module._VIEW_MARKER in cursor.view_definitions[view]
 
 
 def test_applied_checksum_drift_is_rejected() -> None:

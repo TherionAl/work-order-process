@@ -21,7 +21,7 @@ SELECT
   erp_create_date,
   created_at,
   updated_at,
-  1 AS sort_order
+  1 + 0 * CHAR_LENGTH('work_order_process:v0005:revenue_summary_objects') AS sort_order
 FROM ops_service_revenue_monthly
 UNION ALL
 SELECT
@@ -46,6 +46,6 @@ SELECT
   MAX(erp_create_date) AS erp_create_date,
   MIN(created_at) AS created_at,
   MAX(updated_at) AS updated_at,
-  0 AS sort_order
+  0 + 0 * CHAR_LENGTH('work_order_process:v0005:revenue_summary_objects') AS sort_order
 FROM ops_service_revenue_monthly
 GROUP BY stat_year, stat_month;

@@ -166,6 +166,32 @@ _REQUIRED_COLUMNS = {
 }
 
 
+def _required_indexes(statement: str) -> dict[str, tuple[int, tuple[str, ...]]]:
+    indexes: dict[str, tuple[int, tuple[str, ...]]] = {}
+    for line in statement.splitlines():
+        match = re.match(
+            r"\s{2}(PRIMARY KEY|UNIQUE KEY|KEY|INDEX)"
+            r"(?:\s+`?([A-Za-z_][A-Za-z0-9_]*)`?)?\s*\(([^)]+)\)",
+            line,
+            re.IGNORECASE,
+        )
+        if match is None:
+            continue
+        kind, name, raw_columns = match.groups()
+        index_name = "PRIMARY" if kind.upper() == "PRIMARY KEY" else str(name)
+        non_unique = 0 if kind.upper() in {"PRIMARY KEY", "UNIQUE KEY"} else 1
+        columns = tuple(
+            value.strip().strip("`").split("(", maxsplit=1)[0] for value in raw_columns.split(",")
+        )
+        indexes[index_name] = (non_unique, columns)
+    return indexes
+
+
+_REQUIRED_INDEXES = {
+    table: _required_indexes(statement) for table, statement in _TABLE_DDLS.items()
+}
+
+
 def _existing_columns(cursor: Any, database: str, table: str) -> set[str]:
     cursor.execute(
         "SELECT column_name FROM information_schema.columns "
@@ -175,13 +201,69 @@ def _existing_columns(cursor: Any, database: str, table: str) -> set[str]:
     return {str(row[0]) for row in cursor.fetchall()}
 
 
-def is_satisfied(cursor: Any, database: str) -> bool:
-    """Return true only when both import tables have their frozen columns."""
-
-    return all(
-        required.issubset(_existing_columns(cursor, database, table))
-        for table, required in _REQUIRED_COLUMNS.items()
+def _existing_indexes(
+    cursor: Any,
+    database: str,
+    table: str,
+) -> dict[str, tuple[int, tuple[str, ...]]]:
+    cursor.execute(
+        "SELECT index_name, non_unique, seq_in_index, column_name "
+        "FROM information_schema.statistics "
+        "WHERE table_schema = %s AND table_name = %s "
+        "ORDER BY index_name, seq_in_index",
+        (database, table),
     )
+    grouped: dict[str, tuple[int, list[tuple[int, str]]]] = {}
+    for name, non_unique, sequence, column in cursor.fetchall():
+        index_name = str(name)
+        if index_name not in grouped:
+            grouped[index_name] = (int(non_unique), [])
+        grouped[index_name][1].append((int(sequence), str(column)))
+    return {
+        name: (
+            non_unique,
+            tuple(column for _, column in sorted(columns)),
+        )
+        for name, (non_unique, columns) in grouped.items()
+    }
+
+
+def _partitions(cursor: Any, database: str, table: str) -> dict[str, str]:
+    cursor.execute(
+        "SELECT partition_name, partition_description "
+        "FROM information_schema.partitions "
+        "WHERE table_schema = %s AND table_name = %s "
+        "ORDER BY partition_ordinal_position",
+        (database, table),
+    )
+    return {
+        str(name): str(description).strip().upper()
+        for name, description in cursor.fetchall()
+        if name is not None
+    }
+
+
+def _structure_issues(cursor: Any, database: str, table: str) -> list[str]:
+    actual_indexes = _existing_indexes(cursor, database, table)
+    issues = [
+        f"index {name} expected={signature} actual={actual_indexes.get(name)}"
+        for name, signature in _REQUIRED_INDEXES[table].items()
+        if actual_indexes.get(name) != signature
+    ]
+    if _partitions(cursor, database, table).get("p_future") != "MAXVALUE":
+        issues.append("partition p_future must use MAXVALUE")
+    return issues
+
+
+def is_satisfied(cursor: Any, database: str) -> bool:
+    """Check frozen columns, functional indexes, and the MAXVALUE partition."""
+
+    for table, required in _REQUIRED_COLUMNS.items():
+        if not required.issubset(_existing_columns(cursor, database, table)):
+            return False
+        if _structure_issues(cursor, database, table):
+            return False
+    return True
 
 
 def apply(cursor: Any, database: str) -> None:
@@ -197,4 +279,10 @@ def apply(cursor: Any, database: str) -> None:
         if missing:
             raise RuntimeError(
                 f"{table} is missing required columns {missing}; manual repair is required"
+            )
+        issues = _structure_issues(cursor, database, table)
+        if issues:
+            raise RuntimeError(
+                f"{table} has incompatible functional structure: "
+                f"{'; '.join(issues)}; manual repair is required"
             )
