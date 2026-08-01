@@ -157,7 +157,8 @@ class ManagedObjectCursor:
                     statement,
                     re.IGNORECASE,
                 )
-                method = partitioning.group(1).upper() if partitioning else ""
+                ddl_method = partitioning.group(1).upper() if partitioning else ""
+                method = "RANGE" if ddl_method == "RANGE COLUMNS" else ddl_method
                 expression = partitioning.group(2) if partitioning else ""
                 self.partitions[table] = {
                     match.group(1): (match.group(2).upper(), method, expression)
@@ -336,7 +337,7 @@ def test_auxiliary_migration_rejects_missing_maxvalue_partition(table: str) -> N
     ("method", "expression"),
     (
         ("HASH", "create_date"),
-        ("RANGE COLUMNS", "other_date"),
+        ("RANGE", "other_date"),
     ),
 )
 @pytest.mark.parametrize("table", ("erp_data", "customer_account"))
@@ -366,7 +367,7 @@ def test_auxiliary_migration_normalizes_mysql_partition_metadata(table: str) -> 
     migration.apply(cursor, "warehouse")
     cursor.partitions[table]["p_future"] = (
         " MAXVALUE ",
-        " range   columns ",
+        " range ",
         " ( `create_date` ) ",
     )
 

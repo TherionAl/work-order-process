@@ -1259,7 +1259,7 @@ ERP 发布总控：
 - `work_order_process.migrations.v0003_auxiliary_snapshot_tables._existing_columns`：只读检查 ERP 或客户台账列。
 - `work_order_process.migrations.v0003_auxiliary_snapshot_tables._required_indexes`：从冻结 DDL 提取主键、唯一键和关键索引签名。
 - `work_order_process.migrations.v0003_auxiliary_snapshot_tables._existing_indexes`：从 `information_schema.statistics` 读取真实索引签名。
-- `work_order_process.migrations.v0003_auxiliary_snapshot_tables._partitions`：只读检查 `RANGE COLUMNS(create_date)` 方法、表达式及 `p_future/MAXVALUE` 分区。
+- `work_order_process.migrations.v0003_auxiliary_snapshot_tables._partitions`：通过 `PARTITION_METHOD=RANGE` 和规范化后的裸 `create_date` 表达式识别 DDL 契约 `RANGE COLUMNS(create_date)`，并检查 `p_future/MAXVALUE`。
 - `work_order_process.migrations.v0003_auxiliary_snapshot_tables._structure_issues`：汇总索引与分区结构差异。
 - `work_order_process.migrations.v0003_auxiliary_snapshot_tables.is_satisfied`：检查两个快照表的列、索引和分区。
 - `work_order_process.migrations.v0003_auxiliary_snapshot_tables.apply`：创建缺失快照表；既有表结构不完整时拒绝并要求人工修复，不自动增加唯一键。

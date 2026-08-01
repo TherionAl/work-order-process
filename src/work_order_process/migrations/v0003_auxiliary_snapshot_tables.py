@@ -268,7 +268,7 @@ def _structure_issues(cursor: Any, database: str, table: str) -> list[str]:
     if future_partition is None or future_partition[0] != "MAXVALUE":
         issues.append("partition p_future must use MAXVALUE")
     if future_partition is not None and future_partition[1:] != (
-        "RANGE COLUMNS",
+        "RANGE",
         "create_date",
     ):
         issues.append("partitioning must use RANGE COLUMNS(create_date)")
