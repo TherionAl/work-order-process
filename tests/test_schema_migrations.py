@@ -374,6 +374,20 @@ def test_auxiliary_migration_normalizes_mysql_partition_metadata(table: str) -> 
     assert migration.is_satisfied(cursor, "warehouse")
 
 
+@pytest.mark.parametrize("table", ("erp_data", "customer_account"))
+def test_auxiliary_migration_accepts_mysql_84_range_columns_metadata(table: str) -> None:
+    migration = _discovered_migration(3)
+    cursor = ManagedObjectCursor()
+    migration.apply(cursor, "warehouse")
+    cursor.partitions[table]["p_future"] = (
+        "MAXVALUE",
+        "RANGE COLUMNS",
+        "`create_date`",
+    )
+
+    assert migration.is_satisfied(cursor, "warehouse")
+
+
 def test_revenue_migration_replaces_same_name_stale_view_with_stable_marker() -> None:
     migration = _discovered_migration(5)
     module = importlib.import_module("work_order_process.migrations.v0005_revenue_summary_objects")
