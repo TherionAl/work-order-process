@@ -11,7 +11,8 @@ from typing import Any
 
 from .config import MySQLConfig
 from .import_failures import FailureCollector
-from .mysql_storage import _pymysql, ensure_mysql_schema
+from .mysql_storage import _pymysql
+from .mysql_storage import ensure_mysql_schema as ensure_mysql_schema
 from .structured_entities import (
     CONTACT_HASH_FIELDS,
     CUSTOMER_HASH_FIELDS,
@@ -44,7 +45,6 @@ class MySQLCustomerContactStore:
     """Keeps one entity write atomic while preserving completed prior entities."""
 
     def __init__(self, config: MySQLConfig) -> None:
-        ensure_mysql_schema(config)
         pymysql = _pymysql()
         self.connection = pymysql.connect(
             host=config.host,

@@ -455,8 +455,6 @@ def generate_revenue_summary(
         raise ValueError("统计月必须在 1 至 12 之间。")
 
     targets = load_revenue_targets(target_file, year, month)
-    if persist:
-        ensure_revenue_summary_schema(config)
     with pymysql.connect(
         host=config.host,
         port=config.port,

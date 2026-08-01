@@ -1,7 +1,38 @@
+from types import SimpleNamespace
+
+import pytest
+
+from work_order_process import customer_contact_sync
 from work_order_process.customer_contact_sync import (
     sync_contact_entities,
     sync_customer_entities,
 )
+
+
+def test_mysql_store_connects_without_creating_schema(monkeypatch) -> None:
+    connection = object()
+    monkeypatch.setattr(
+        customer_contact_sync,
+        "ensure_mysql_schema",
+        lambda config: pytest.fail("ordinary entity sync must not create schema"),
+    )
+    monkeypatch.setattr(
+        customer_contact_sync,
+        "_pymysql",
+        lambda: SimpleNamespace(connect=lambda **kwargs: connection),
+    )
+
+    store = customer_contact_sync.MySQLCustomerContactStore(
+        SimpleNamespace(
+            host="db",
+            port=3306,
+            user="user",
+            password="secret",
+            database="warehouse",
+        )
+    )
+
+    assert store.connection is connection
 
 
 class FakeClient:

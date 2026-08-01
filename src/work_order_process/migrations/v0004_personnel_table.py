@@ -1,0 +1,71 @@
+"""Create the personnel import table through an explicit migration."""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+VERSION = 4
+NAME = "personnel_table"
+
+# This payload is intentionally frozen here. Do not import PERSONNEL_DDL from
+# the runtime importer; doing so would let business-code edits bypass checksum
+# drift protection.
+_PERSONNEL_DDL = """
+CREATE TABLE IF NOT EXISTS personnel (
+  employee_no VARCHAR(64) NOT NULL,
+  person_name VARCHAR(255) NULL,
+  province VARCHAR(100) NULL,
+  role_names TEXT NULL,
+  group_name VARCHAR(255) NULL,
+  last_sync_at TIMESTAMP NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (employee_no),
+  KEY idx_person_name (person_name),
+  KEY idx_province (province),
+  KEY idx_group_name (group_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+"""
+
+
+def _required_columns() -> frozenset[str]:
+    ignored = {"PRIMARY", "UNIQUE", "KEY", "INDEX"}
+    columns: set[str] = set()
+    for line in _PERSONNEL_DDL.splitlines():
+        match = re.match(r"\s{2}`?([A-Za-z_][A-Za-z0-9_]*)`?\s+", line)
+        if match and match.group(1).upper() not in ignored:
+            columns.add(match.group(1))
+    return frozenset(columns)
+
+
+_REQUIRED_COLUMNS = _required_columns()
+
+
+def _existing_columns(cursor: Any, database: str) -> set[str]:
+    cursor.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = %s AND table_name = %s",
+        (database, "personnel"),
+    )
+    return {str(row[0]) for row in cursor.fetchall()}
+
+
+def is_satisfied(cursor: Any, database: str) -> bool:
+    """Return true only when every personnel write column exists."""
+
+    return _REQUIRED_COLUMNS.issubset(_existing_columns(cursor, database))
+
+
+def apply(cursor: Any, database: str) -> None:
+    """Create a missing table or reject a partial structure for manual repair."""
+
+    existing = _existing_columns(cursor, database)
+    if not existing:
+        cursor.execute(_PERSONNEL_DDL)
+        return
+    missing = sorted(_REQUIRED_COLUMNS - existing)
+    if missing:
+        raise RuntimeError(
+            f"personnel is missing required columns {missing}; manual repair is required"
+        )

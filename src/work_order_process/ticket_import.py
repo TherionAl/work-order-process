@@ -19,8 +19,8 @@ from .mysql_storage import (
     _upsert_ticket_detail,
     build_ticket_detail_custom_field_rows,
     build_ticket_detail_main_row,
-    ensure_mysql_schema,
 )
+from .mysql_storage import ensure_mysql_schema as ensure_mysql_schema
 from .resolver import TicketFieldResolver, _split_id_list, resolve_ticket_detail_values
 from .sync_log import write_sync_log
 
@@ -82,7 +82,6 @@ def import_month_tickets_serial(
             "failures_truncated": False,
         }
 
-    ensure_mysql_schema(config)
     ticket_ids, already_current = _filter_ticket_rows_for_import(config, ticket_rows, month_label)
     if not ticket_ids:
         write_sync_log(
@@ -250,7 +249,6 @@ def import_month_tickets_to_mysql(
             "failures_truncated": False,
         }
 
-    ensure_mysql_schema(config)
     ticket_ids, already_current = _filter_ticket_rows_for_import(config, ticket_rows, month_label)
     if not ticket_ids:
         write_sync_log(

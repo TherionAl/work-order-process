@@ -108,6 +108,66 @@ def test_capture_sanitizes_record_id_with_the_same_boundary_as_messages() -> Non
     assert "password=[redacted]" in failure.record_id
 
 
+def test_capture_sanitizes_and_bounds_public_stage() -> None:
+    collector = FailureCollector()
+
+    failure = collector.capture(
+        stage=(
+            'payload={"secret":"value"} password="my password" '
+            "user@example.com 13800138000 api-secret " + "x" * 600
+        ),
+        record_id="T1",
+        exc=RuntimeError("failed"),
+        secrets=("api-secret",),
+    )
+
+    assert failure.stage == "[payload redacted]"
+    assert len(failure.stage) <= 500
+    serialized = repr(failure.as_dict())
+    assert "my password" not in serialized
+    assert "user@example.com" not in serialized
+    assert "13800138000" not in serialized
+    assert "api-secret" not in serialized
+
+
+@pytest.mark.parametrize(
+    ("stage", "secrets", "forbidden", "replacement"),
+    (
+        ('password="my password"', (), "my password", "password=[redacted]"),
+        ("customer=user@example.com", (), "user@example.com", "[email]"),
+        ("customer=13800138000", (), "13800138000", "[phone]"),
+        ("token=api-secret", ("api-secret",), "api-secret", "[redacted]"),
+        ('payload={"secret":"value"}', (), '"secret"', "[payload redacted]"),
+    ),
+)
+def test_capture_applies_each_redaction_rule_to_public_stage(
+    stage: str,
+    secrets: tuple[str, ...],
+    forbidden: str,
+    replacement: str,
+) -> None:
+    failure = FailureCollector().capture(
+        stage=stage,
+        record_id="T1",
+        exc=RuntimeError("failed"),
+        secrets=secrets,
+    )
+
+    assert forbidden not in failure.stage
+    assert replacement in failure.stage
+
+
+def test_capture_bounds_long_non_payload_stage() -> None:
+    failure = FailureCollector().capture(
+        stage="diagnostic-" + "x" * 600,
+        record_id="T1",
+        exc=RuntimeError("failed"),
+    )
+
+    assert len(failure.stage) == 500
+    assert failure.stage.startswith("diagnostic-")
+
+
 def test_sanitize_failure_message_replaces_structured_payloads() -> None:
     safe_message = sanitize_failure_message(
         ValueError('{"token":"secret-value","records":[{"id":1}]}'),

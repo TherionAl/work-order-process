@@ -106,7 +106,7 @@ class FailureCollector:
             raise ValueError("record_id or source_row is required")
         secret_values = tuple(secrets)
         failure = ImportFailure(
-            stage=stage,
+            stage=_sanitize_text(str(stage), secrets=secret_values),
             record_id=(
                 None if record_id is None else _sanitize_text(str(record_id), secrets=secret_values)
             ),

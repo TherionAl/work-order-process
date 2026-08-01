@@ -12,7 +12,7 @@ from typing import Any
 
 from openpyxl import load_workbook
 
-from .auxiliary_schema import ensure_auxiliary_schema
+from .auxiliary_schema import ensure_auxiliary_schema as ensure_auxiliary_schema
 from .config import MySQLConfig
 from .erp_schema import (
     LEGACY_ERP_COLUMN_MAP,
@@ -394,7 +394,6 @@ def _import_erp_records(
 
     import pymysql
 
-    ensure_auxiliary_schema(config)
     conn = pymysql.connect(
         host=config.host,
         port=config.port,

@@ -451,16 +451,24 @@ uv run --all-groups work_order_process mysql-migrate
 第 9 章的 8 步流程停止和恢复 `daily_runner`；本手册的命令示例不表示任何生产数据库
 已经执行迁移。
 
+普通工单、客户、联系人、ERP、客户台账、人员和营收写入不会调用任何 `ensure_*_schema`
+函数，也不会隐式执行 `CREATE` 或 `ALTER`。CLI 在业务工作前只读检查版本；版本落后时停止，
+先运行 `mysql-schema-status` 核对，再由操作人员显式运行 `mysql-migrate`。公开的
+`ensure_mysql_schema`、`ensure_auxiliary_schema`、`ensure_personnel_schema` 和
+`ensure_revenue_summary_schema` 仅为兼容既有模块导入或明确的维护调用而保留，不属于普通写入路径。
+
 #### 迁移命令边界（契约）
 
 - `mysql-schema-status`：只读；不创建或修改表、不写入版本、不执行 DDL。
 - `mysql-init`：只创建新库基础结构并记录已满足迁移；不执行 pending migration DDL。
 - `mysql-migrate`：唯一显式执行 pending migration DDL 的命令。
+- 普通导入、同步和营收持久化：只写业务数据；不调用 `ensure_*_schema`，不执行隐式结构 DDL。
 
 禁止模式（以下均不成立）：
 - `mysql-schema-status` 会写 DDL 或创建 `schema_version`。
 - `mysql-init` 会执行 pending migration 或调用 `migrate_schema`。
 - `mysql-migrate` 不是唯一写入 pending migration DDL 的入口。
+- 普通导入会在写业务数据前自动建表或补列。
 
 #### `mysql-drop-tables`（R3，危险）
 
@@ -751,6 +759,9 @@ uv run --all-groups work_order_process metric-ticket `
 | `work_order_process.migrations.__init__` | 版本化迁移子包标识 | 无 |
 | `work_order_process.migrations.v0001_current_schema` | 当前工单基础结构基线 | 显式迁移时执行 MySQL DDL |
 | `work_order_process.migrations.v0002_erp_allocation_columns` | ERP 年度分摊列迁移 | 显式迁移时执行 MySQL DDL |
+| `work_order_process.migrations.v0003_auxiliary_snapshot_tables` | ERP 与客户台账快照表 | 显式迁移时创建缺表，部分旧结构拒绝并要求人工修复 |
+| `work_order_process.migrations.v0004_personnel_table` | 人员表 | 显式迁移时创建缺表，部分旧结构拒绝并要求人工修复 |
+| `work_order_process.migrations.v0005_revenue_summary_objects` | 营收月表与合计视图 | 显式迁移时建表/视图并安全校正旧金额精度和列序 |
 | `work_order_process.structured_entities` | 客户和联系人标准行 | 纯转换 |
 | `work_order_process.customer_contact_sync` | 当前表、历史表和原始记录同步 | API、MySQL |
 | `work_order_process.personnel_import` | 人员 `.xls` 导入 | Excel、MySQL |
@@ -1179,7 +1190,7 @@ ERP 发布总控：
 
 #### 工单数据库：`work_order_process.mysql_storage`
 
-- `work_order_process.mysql_storage.ensure_mysql_schema`：创建基础表、分析表和分区。
+- `work_order_process.mysql_storage.ensure_mysql_schema`：兼容保留的显式基础结构维护函数；普通导入不调用。
 - `work_order_process.mysql_storage._ensure_customer_contact_analytics_schema`：补客户联系人分析结构。
 - `work_order_process.mysql_storage.create_customer_contact_analysis_views`：创建分析视图。
 - `work_order_process.mysql_storage._add_missing_columns`：按迁移语句补列。
@@ -1244,6 +1255,20 @@ ERP 发布总控：
 - `work_order_process.migrations.v0002_erp_allocation_columns.missing_columns`：计算缺失的年度分摊列。
 - `work_order_process.migrations.v0002_erp_allocation_columns.is_satisfied`：ERP 表不存在或列齐全时满足。
 - `work_order_process.migrations.v0002_erp_allocation_columns.apply`：只增加缺失的年度分摊列。
+- `work_order_process.migrations.v0003_auxiliary_snapshot_tables._required_columns`：从冻结 DDL 提取写入所需列。
+- `work_order_process.migrations.v0003_auxiliary_snapshot_tables._existing_columns`：只读检查 ERP 或客户台账列。
+- `work_order_process.migrations.v0003_auxiliary_snapshot_tables.is_satisfied`：检查两个快照表完整结构。
+- `work_order_process.migrations.v0003_auxiliary_snapshot_tables.apply`：创建缺失快照表；部分表明确要求人工修复。
+- `work_order_process.migrations.v0004_personnel_table._required_columns`：从冻结 DDL 提取人员写入列。
+- `work_order_process.migrations.v0004_personnel_table._existing_columns`：只读检查人员表列。
+- `work_order_process.migrations.v0004_personnel_table.is_satisfied`：检查人员表完整结构。
+- `work_order_process.migrations.v0004_personnel_table.apply`：创建缺失人员表；部分表明确要求人工修复。
+- `work_order_process.migrations.v0005_revenue_summary_objects._required_columns`：从冻结 DDL 提取营收写入列。
+- `work_order_process.migrations.v0005_revenue_summary_objects._column_definition`：读取冻结列定义用于安全校正。
+- `work_order_process.migrations.v0005_revenue_summary_objects._metadata`：只读取得营收列精度和顺序。
+- `work_order_process.migrations.v0005_revenue_summary_objects._view_exists`：只读检查合计视图。
+- `work_order_process.migrations.v0005_revenue_summary_objects.is_satisfied`：检查营收表、金额精度、列序和视图。
+- `work_order_process.migrations.v0005_revenue_summary_objects.apply`：建缺表/视图并迁移已知旧金额精度和列序。
 - `work_order_process.mysql_storage._merge_failure_collectors`：合并有界的结构化失败收集器。
 - `work_order_process.mysql_storage._merge_failure_payload`：合并批次报告中的安全失败明细。
 - `work_order_process.mysql_storage._safe_rollback`：连接可用时回滚。
@@ -1291,7 +1316,7 @@ ERP 发布总控：
 
 - `work_order_process.personnel_import.build_personnel_row`：人员行标准化。
 - `work_order_process.personnel_import.read_personnel_xls`：读取 `.xls` 第一表。
-- `work_order_process.personnel_import.ensure_personnel_schema`：确保人员表。
+- `work_order_process.personnel_import.ensure_personnel_schema`：兼容保留的显式人员表维护函数；普通导入不调用。
 - `work_order_process.personnel_import.import_personnel_xls_to_mysql`：人员导入总控。
 - `work_order_process.personnel_import.upsert_personnel_rows`：按工号 upsert。
 - `work_order_process.personnel_import._normalize_cell`：去空和数字 `.0`。
@@ -1318,8 +1343,8 @@ ERP 发布总控：
 
 #### 辅助表：`work_order_process.auxiliary_schema`
 
-- `work_order_process.auxiliary_schema.ensure_auxiliary_schema`：幂等创建 `erp_data` 和
-  `customer_account`；不再隐式修改已存在的 ERP 表。
+- `work_order_process.auxiliary_schema.ensure_auxiliary_schema`：兼容保留的显式调用，可幂等创建
+  `erp_data` 和 `customer_account`；普通 ERP/客户台账导入不调用。
 
 #### ERP 结构和迁移
 
@@ -1419,7 +1444,7 @@ ERP 发布总控：
 - `work_order_process.revenue_summary.load_revenue_targets`：读取指定年月平台目标。
 - `work_order_process.revenue_summary.build_revenue_rows`：目标和指标组合、同比计算。
 - `work_order_process.revenue_summary.export_revenue_workbook`：中英文头、合计和格式。
-- `work_order_process.revenue_summary.ensure_revenue_summary_schema`：建表、迁移金额精度和视图。
+- `work_order_process.revenue_summary.ensure_revenue_summary_schema`：兼容保留的显式维护函数；普通营收持久化不调用。
 - `work_order_process.revenue_summary.fetch_revenue_metrics`：ERP SQL 聚合。
 - `work_order_process.revenue_summary.validate_revenue_snapshot`：存在性和分摊空值检查。
 - `work_order_process.revenue_summary.require_revenue_metrics`：防止全空生成全零。

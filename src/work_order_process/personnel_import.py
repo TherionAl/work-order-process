@@ -109,7 +109,6 @@ def import_personnel_xls_to_mysql(config: MySQLConfig, path: Path) -> dict[str, 
     """Import a local personnel .xls file into MySQL."""
 
     rows = read_personnel_xls(path)
-    ensure_personnel_schema(config)
     affected = upsert_personnel_rows(config, rows)
     return {
         "table": "personnel",

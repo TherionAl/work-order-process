@@ -254,7 +254,7 @@ def test_import_report_records_source_count_affected_rows_and_call_order(
     monkeypatch.setattr(
         personnel_import,
         "ensure_personnel_schema",
-        lambda mysql: calls.append(("schema", mysql)),
+        lambda mysql: pytest.fail("ordinary personnel import must not create schema"),
     )
     monkeypatch.setattr(
         personnel_import,
@@ -272,7 +272,6 @@ def test_import_report_records_source_count_affected_rows_and_call_order(
     }
     assert calls == [
         ("read", source),
-        ("schema", _mysql()),
         ("upsert", _mysql(), rows),
     ]
     assert tuple(PERSONNEL_COLUMNS) == (

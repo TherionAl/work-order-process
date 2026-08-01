@@ -11,7 +11,7 @@ from typing import Any
 
 from openpyxl import load_workbook
 
-from .auxiliary_schema import ensure_auxiliary_schema
+from .auxiliary_schema import ensure_auxiliary_schema as ensure_auxiliary_schema
 from .config import MySQLConfig
 from .import_failures import FailureCollector, ImportFailure
 
@@ -339,7 +339,6 @@ def _import_customer_account_snapshot(
     wb: Any | None = None
     current_stage = STAGE_FAILURE_STAGE
     try:
-        ensure_auxiliary_schema(config)
         wb = load_workbook(file_path, read_only=True, data_only=True)
         ws = wb[sheet_name] if sheet_name else wb[wb.sheetnames[0]]
         workbook_rows = iter(ws.iter_rows(values_only=True))

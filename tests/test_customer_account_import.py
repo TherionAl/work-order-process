@@ -228,7 +228,11 @@ def test_parse_failure_never_touches_formal_snapshot(monkeypatch) -> None:
     workbook = RecordingWorkbook([tuple(header for header, _ in COLUMN_MAP), tuple(row)])
     monkeypatch.setattr(customer_account_import, "load_workbook", lambda *args, **kwargs: workbook)
     monkeypatch.setattr(customer_account_import, "_connect", lambda config: connection)
-    monkeypatch.setattr(customer_account_import, "ensure_auxiliary_schema", lambda config: None)
+    monkeypatch.setattr(
+        customer_account_import,
+        "ensure_auxiliary_schema",
+        lambda config: pytest.fail("ordinary customer-account import must not create schema"),
+    )
 
     with pytest.raises(CustomerAccountImportError):
         import_customer_account_xlsx(

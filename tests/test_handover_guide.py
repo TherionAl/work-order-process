@@ -129,11 +129,13 @@ CONTRACTS = {
             "`mysql-schema-status`：只读；不创建或修改表、不写入版本、不执行 DDL。",
             "`mysql-init`：只创建新库基础结构并记录已满足迁移；不执行 pending migration DDL。",
             "`mysql-migrate`：唯一显式执行 pending migration DDL 的命令。",
+            "普通导入、同步和营收持久化：只写业务数据；不调用 `ensure_*_schema`，不执行隐式结构 DDL。",
         ),
         (
             "`mysql-schema-status` 会写 DDL 或创建 `schema_version`。",
             "`mysql-init` 会执行 pending migration 或调用 `migrate_schema`。",
             "`mysql-migrate` 不是唯一写入 pending migration DDL 的入口。",
+            "普通导入会在写业务数据前自动建表或补列。",
         ),
     ),
     "受控重试：`work_order_process.api_transport`": (

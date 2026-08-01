@@ -1,6 +1,12 @@
+from __future__ import annotations
+
 import threading
+from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
+from work_order_process import mysql_storage
 from work_order_process.mysql_storage import (
     API_RAW_RECORD_DDL,
     API_SYNC_BATCH_DDL,
@@ -14,6 +20,108 @@ from work_order_process.mysql_storage import (
     _fetch_batch_details,
     build_ticket_detail_main_row,
 )
+
+
+def _mysql_config() -> SimpleNamespace:
+    return SimpleNamespace(
+        host="db",
+        port=3306,
+        user="user",
+        password="secret",
+        database="warehouse",
+    )
+
+
+def test_single_ticket_import_does_not_create_schema(monkeypatch) -> None:
+    class Client:
+        def fetch_ticket_detail(self, ticket_id: str) -> dict[str, str]:
+            return {"ticketId": ticket_id, "createDT": "2026-07-29 00:00:00"}
+
+        def fetch_ticket_fields(self) -> list[object]:
+            return []
+
+        def fetch_company_fields(self) -> list[object]:
+            return []
+
+    monkeypatch.setattr(
+        mysql_storage,
+        "ensure_mysql_schema",
+        lambda config: pytest.fail("ordinary single-ticket import must not create schema"),
+    )
+    monkeypatch.setattr(mysql_storage, "TicketFieldResolver", lambda *args: object())
+    monkeypatch.setattr(
+        mysql_storage,
+        "resolve_ticket_detail_values",
+        lambda raw, client, resolver: raw,
+    )
+    monkeypatch.setattr(
+        mysql_storage,
+        "build_ticket_detail_main_row",
+        lambda raw: {"ticket_id": raw["ticketId"]},
+    )
+    monkeypatch.setattr(
+        mysql_storage,
+        "build_ticket_detail_custom_field_rows",
+        lambda raw, resolved: [],
+    )
+    monkeypatch.setattr(mysql_storage, "upsert_ticket_detail", lambda *args: None)
+
+    report = mysql_storage.import_ticket_detail_to_mysql(
+        _mysql_config(),
+        object(),
+        Client(),
+        "T1",
+    )
+
+    assert report == {"ticket_id": "T1", "main_rows": 1, "custom_field_rows": 0}
+
+
+def test_explicit_analysis_view_command_does_not_create_core_schema(monkeypatch) -> None:
+    class Cursor:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        def __enter__(self) -> Cursor:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def execute(self, statement: str) -> None:
+            self.statements.append(statement)
+
+    class Connection:
+        def __init__(self) -> None:
+            self.cursor_instance = Cursor()
+
+        def __enter__(self) -> Connection:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def cursor(self) -> Cursor:
+            return self.cursor_instance
+
+    connection = Connection()
+    monkeypatch.setattr(
+        mysql_storage,
+        "ensure_mysql_schema",
+        lambda config: pytest.fail("view command must not create the core schema"),
+    )
+    monkeypatch.setattr(
+        mysql_storage,
+        "_pymysql",
+        lambda: SimpleNamespace(connect=lambda **kwargs: connection),
+    )
+
+    mysql_storage.create_customer_contact_analysis_views(_mysql_config())
+
+    assert connection.cursor_instance.statements == [
+        mysql_storage.CUSTOMER_SERVICE_VIEW_SQL,
+        mysql_storage.CONTACT_SERVICE_VIEW_SQL,
+        mysql_storage.CUSTOMER_DATA_QUALITY_VIEW_SQL,
+    ]
 
 
 def test_build_ticket_detail_main_row_defaults_ticket_category() -> None:

@@ -389,7 +389,7 @@ def test_serial_import_preserves_successes_and_structures_api_and_database_failu
     monkeypatch.setattr(
         ticket_import,
         "ensure_mysql_schema",
-        lambda config: calls.append(("schema", config)),
+        lambda config: pytest.fail("ordinary ticket import must not create schema"),
     )
     monkeypatch.setattr(
         ticket_import,
@@ -493,7 +493,6 @@ def test_serial_import_preserves_successes_and_structures_api_and_database_failu
     assert report["custom_field_rows"] == 4
     assert client.detail_calls == ticket_ids
     assert calls == [
-        ("schema", _config()),
         ("commit", "insert", True),
         ("commit", "update", True),
         ("commit", "db-error", True),

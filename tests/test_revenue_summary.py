@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import sys
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +18,85 @@ from work_order_process.revenue_summary import (
     fetch_revenue_metrics,
     load_revenue_targets,
 )
+
+
+def test_persisted_revenue_generation_does_not_create_schema(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class Cursor:
+        def __enter__(self) -> Cursor:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+    class Connection:
+        def __init__(self) -> None:
+            self.commits = 0
+
+        def __enter__(self) -> Connection:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+        def commit(self) -> None:
+            self.commits += 1
+
+    connection = Connection()
+    monkeypatch.setattr(
+        revenue_summary,
+        "ensure_revenue_summary_schema",
+        lambda config: pytest.fail("ordinary revenue persistence must not create schema"),
+    )
+    monkeypatch.setattr(
+        revenue_summary,
+        "load_revenue_targets",
+        lambda *args: {"platform": Decimal("100")},
+    )
+    monkeypatch.setattr(revenue_summary, "validate_revenue_snapshot", lambda *args: 1)
+    monkeypatch.setattr(
+        revenue_summary,
+        "fetch_revenue_metrics",
+        lambda *args, **kwargs: {"platform": {}},
+    )
+    monkeypatch.setattr(revenue_summary, "require_revenue_metrics", lambda *args: None)
+    monkeypatch.setattr(
+        revenue_summary,
+        "build_revenue_rows",
+        lambda **kwargs: [{"sales_platform": "platform"}],
+    )
+    monkeypatch.setattr(revenue_summary, "replace_revenue_rows", lambda *args, **kwargs: None)
+    monkeypatch.setattr(revenue_summary, "export_revenue_workbook", lambda *args: None)
+    monkeypatch.setitem(
+        sys.modules,
+        "pymysql",
+        SimpleNamespace(connect=lambda **kwargs: connection),
+    )
+
+    report = revenue_summary.generate_revenue_summary(
+        SimpleNamespace(
+            host="db",
+            port=3306,
+            user="user",
+            password="secret",
+            database="warehouse",
+        ),
+        target_file=tmp_path / "targets.xlsx",
+        year=2026,
+        month=7,
+        output_dir=tmp_path,
+        erp_create_date="20260731",
+        output_path=tmp_path / "summary.xlsx",
+        persist=True,
+    )
+
+    assert report["persisted"] is True
+    assert connection.commits == 1
 
 
 def test_load_revenue_targets_reads_selected_period_and_ignores_total(tmp_path: Path) -> None:

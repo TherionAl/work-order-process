@@ -538,7 +538,6 @@ def _ensure_customer_contact_analytics_schema(cursor: Any, database: str) -> Non
 def create_customer_contact_analysis_views(config: MySQLConfig) -> None:
     """Create the query-only customer/contact analytics views."""
 
-    ensure_mysql_schema(config)
     pymysql = _pymysql()
     with pymysql.connect(
         host=config.host,
@@ -712,7 +711,6 @@ def import_ticket_detail_to_mysql(
 ) -> dict[str, Any]:
     """拉取单条工单详情，完成 value 替换后写入 MySQL。"""
 
-    ensure_mysql_schema(config)
     raw_detail = client.fetch_ticket_detail(ticket_id)
     if not raw_detail:
         raise ApiError(f"Ticket detail not found: {ticket_id}")
@@ -911,7 +909,6 @@ def import_customers_to_mysql(
         "raw_saved": report.raw_saved,
     }
 
-    ensure_mysql_schema(config)
     started_at = datetime.now()
     total = 0
     succeeded = 0
@@ -1024,7 +1021,6 @@ def import_contacts_to_mysql(
         "raw_saved": report.raw_saved,
     }
 
-    ensure_mysql_schema(config)
     started_at = datetime.now()
     total = 0
     succeeded = 0

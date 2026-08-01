@@ -142,7 +142,11 @@ def _write_workbook(path: Path, headers: list[str], row: list[object]) -> None:
 
 def _import_values(monkeypatch: pytest.MonkeyPatch, path: Path) -> list[object]:
     connection = FakeConnection()
-    monkeypatch.setattr(erp_import, "ensure_auxiliary_schema", lambda config: None)
+    monkeypatch.setattr(
+        erp_import,
+        "ensure_auxiliary_schema",
+        lambda config: pytest.fail("ordinary ERP import must not create schema"),
+    )
     monkeypatch.setitem(
         sys.modules,
         "pymysql",

@@ -39,9 +39,187 @@ class ScriptedMigrationCursor:
 def test_discovered_migrations_are_sorted_and_unique() -> None:
     migrations = discover_migrations()
 
-    assert [migration.version for migration in migrations] == [1, 2]
-    assert len({migration.version for migration in migrations}) == 2
+    assert [migration.version for migration in migrations] == [1, 2, 3, 4, 5]
+    assert len({migration.version for migration in migrations}) == 5
     assert all(len(migration.checksum) == 64 for migration in migrations)
+
+
+def _discovered_migration(version: int) -> Migration:
+    migration = next(
+        (migration for migration in discover_migrations() if migration.version == version),
+        None,
+    )
+    if migration is None:
+        pytest.fail(f"migration {version} is not discoverable")
+    return migration
+
+
+class ManagedObjectCursor:
+    """Small information-schema fake that applies frozen migration DDL."""
+
+    def __init__(self) -> None:
+        self.columns: dict[str, list[str]] = {}
+        self.scales: dict[tuple[str, str], int | None] = {}
+        self.views: set[str] = set()
+        self.statements: list[str] = []
+        self.result: list[tuple[object, ...]] = []
+
+    def execute(self, statement: str, params: object = None) -> None:
+        self.statements.append(statement)
+        lowered = statement.lower()
+        if "information_schema.columns" in lowered:
+            assert isinstance(params, tuple)
+            table = str(params[-1])
+            names = self.columns.get(table, [])
+            if "numeric_scale" in lowered:
+                self.result = [
+                    (name, self.scales.get((table, name)), position)
+                    for position, name in enumerate(names, start=1)
+                ]
+            else:
+                self.result = [(name,) for name in names]
+            return
+        if "information_schema.views" in lowered:
+            assert isinstance(params, tuple)
+            view = str(params[-1])
+            self.result = [(view,)] if view in self.views else []
+            return
+        create_table = re.search(
+            r"CREATE TABLE IF NOT EXISTS\s+`?([A-Za-z_][A-Za-z0-9_]*)`?",
+            statement,
+            re.IGNORECASE,
+        )
+        if create_table:
+            table = create_table.group(1)
+            if table not in self.columns:
+                ignored = {"PRIMARY", "UNIQUE", "KEY", "INDEX", "PARTITION"}
+                names: list[str] = []
+                for line in statement.splitlines():
+                    match = re.match(r"\s{2}`?([A-Za-z_][A-Za-z0-9_]*)`?\s+", line)
+                    if match and match.group(1).upper() not in ignored:
+                        name = match.group(1)
+                        names.append(name)
+                        scale = re.search(r"DECIMAL\(\d+,(\d+)\)", line, re.IGNORECASE)
+                        self.scales[(table, name)] = int(scale.group(1)) if scale else None
+                self.columns[table] = names
+            self.result = []
+            return
+        create_view = re.search(
+            r"CREATE OR REPLACE VIEW\s+`?([A-Za-z_][A-Za-z0-9_]*)`?",
+            statement,
+            re.IGNORECASE,
+        )
+        if create_view:
+            self.views.add(create_view.group(1))
+            self.result = []
+            return
+        if lowered.startswith("alter table ops_service_revenue_monthly"):
+            for column in (
+                "revenue_target",
+                "recognized_revenue",
+                "contracts_on_hand_amount",
+                "prior_year_contracts_on_hand_amount",
+                "contracts_on_hand_yoy_amount",
+                "recognized_revenue_excluding_estimate",
+                "prior_year_recognized_revenue",
+                "recognized_revenue_yoy_amount",
+                "signing_completed_amount",
+                "prior_year_signing_amount",
+                "signing_yoy_amount",
+            ):
+                if f"MODIFY COLUMN {column}" in statement:
+                    self.scales[("ops_service_revenue_monthly", column)] = 0
+            if "MODIFY COLUMN erp_create_date" in statement:
+                names = self.columns["ops_service_revenue_monthly"]
+                names.remove("erp_create_date")
+                names.insert(names.index("created_at"), "erp_create_date")
+            self.result = []
+            return
+        self.result = []
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return self.result
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        return self.result[0] if self.result else None
+
+
+@pytest.mark.parametrize(
+    ("version", "tables", "required_columns"),
+    [
+        (3, ("erp_data", "customer_account"), ("contract_id", "annual_ops_fee")),
+        (4, ("personnel",), ("employee_no", "last_sync_at")),
+    ],
+)
+def test_object_migration_creates_missing_tables_and_then_is_satisfied(
+    version: int,
+    tables: tuple[str, ...],
+    required_columns: tuple[str, ...],
+) -> None:
+    migration = _discovered_migration(version)
+    cursor = ManagedObjectCursor()
+
+    assert not migration.is_satisfied(cursor, "warehouse")
+    migration.apply(cursor, "warehouse")
+
+    assert migration.is_satisfied(cursor, "warehouse")
+    assert set(tables).issubset(cursor.columns)
+    assert all(
+        any(column in columns for columns in cursor.columns.values()) for column in required_columns
+    )
+
+
+@pytest.mark.parametrize(
+    ("version", "table"),
+    [(3, "erp_data"), (4, "personnel"), (5, "ops_service_revenue_monthly")],
+)
+def test_object_migration_rejects_partial_existing_table(version: int, table: str) -> None:
+    migration = _discovered_migration(version)
+    cursor = ManagedObjectCursor()
+    cursor.columns[table] = ["id"]
+
+    assert not migration.is_satisfied(cursor, "warehouse")
+    with pytest.raises(RuntimeError, match=r"missing required columns.*manual repair"):
+        migration.apply(cursor, "warehouse")
+
+
+def test_revenue_migration_creates_table_and_total_view() -> None:
+    migration = _discovered_migration(5)
+    cursor = ManagedObjectCursor()
+
+    migration.apply(cursor, "warehouse")
+
+    assert migration.is_satisfied(cursor, "warehouse")
+    assert "ops_service_revenue_monthly" in cursor.columns
+    assert "v_ops_service_revenue_monthly_with_total" in cursor.views
+
+
+def test_revenue_migration_safely_corrects_legacy_scale_order_and_view() -> None:
+    migration = _discovered_migration(5)
+    cursor = ManagedObjectCursor()
+    migration.apply(cursor, "warehouse")
+    cursor.views.clear()
+    money_column = "recognized_revenue"
+    cursor.scales[("ops_service_revenue_monthly", money_column)] = 2
+    names = cursor.columns["ops_service_revenue_monthly"]
+    names.remove("erp_create_date")
+    names.insert(0, "erp_create_date")
+    cursor.statements.clear()
+
+    assert not migration.is_satisfied(cursor, "warehouse")
+    migration.apply(cursor, "warehouse")
+
+    assert migration.is_satisfied(cursor, "warehouse")
+    assert any(
+        statement.startswith("UPDATE ops_service_revenue_monthly")
+        for statement in cursor.statements
+    )
+    assert any(
+        "MODIFY COLUMN recognized_revenue DECIMAL(18,0)" in statement
+        for statement in cursor.statements
+    )
+    assert any("MODIFY COLUMN erp_create_date" in statement for statement in cursor.statements)
+    assert any("CREATE OR REPLACE VIEW" in statement for statement in cursor.statements)
 
 
 def test_applied_checksum_drift_is_rejected() -> None:
@@ -435,7 +613,7 @@ def test_schema_status_without_version_table_is_read_only(monkeypatch) -> None:
     status = schema_status(_config())
 
     assert status.current_version == 0
-    assert status.pending_versions == (1, 2)
+    assert status.pending_versions == (1, 2, 3, 4, 5)
     assert not any(statement.lstrip().startswith("CREATE") for statement in cursor.statements)
 
 
@@ -459,7 +637,7 @@ def test_assert_schema_current_reports_pending_versions(monkeypatch) -> None:
     monkeypatch.setattr(
         schema_migrations,
         "schema_status",
-        lambda config: schema_migrations.SchemaStatus(0, 2, (1, 2), ()),
+        lambda config: schema_migrations.SchemaStatus(0, 5, (1, 2, 3, 4, 5), ()),
     )
 
     with pytest.raises(SchemaMigrationError, match=r"pending.*1.*2"):
@@ -474,8 +652,8 @@ def _status(*, pending: tuple[int, ...]) -> object:
     from work_order_process.schema_migrations import SchemaStatus
 
     return SchemaStatus(
-        current_version=0 if pending else 2,
-        target_version=2,
+        current_version=0 if pending else 5,
+        target_version=5,
         pending_versions=pending,
         drifted_versions=(),
     )
