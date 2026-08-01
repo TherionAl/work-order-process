@@ -228,19 +228,33 @@ def _existing_indexes(
     }
 
 
-def _partitions(cursor: Any, database: str, table: str) -> dict[str, str]:
+def _partitions(
+    cursor: Any,
+    database: str,
+    table: str,
+) -> dict[str, tuple[str, str, str]]:
     cursor.execute(
-        "SELECT partition_name, partition_description "
+        "SELECT partition_name, partition_description, "
+        "partition_method, partition_expression "
         "FROM information_schema.partitions "
         "WHERE table_schema = %s AND table_name = %s "
         "ORDER BY partition_ordinal_position",
         (database, table),
     )
-    return {
-        str(name): str(description).strip().upper()
-        for name, description in cursor.fetchall()
-        if name is not None
-    }
+    partitions: dict[str, tuple[str, str, str]] = {}
+    for name, description, method, expression in cursor.fetchall():
+        if name is None:
+            continue
+        normalized_method = re.sub(r"\s+", " ", str(method or "").strip()).upper()
+        normalized_expression = re.sub(r"[\s`]", "", str(expression or "")).lower()
+        while normalized_expression.startswith("(") and normalized_expression.endswith(")"):
+            normalized_expression = normalized_expression[1:-1]
+        partitions[str(name)] = (
+            str(description or "").strip(" '\"`").upper(),
+            normalized_method,
+            normalized_expression,
+        )
+    return partitions
 
 
 def _structure_issues(cursor: Any, database: str, table: str) -> list[str]:
@@ -250,8 +264,14 @@ def _structure_issues(cursor: Any, database: str, table: str) -> list[str]:
         for name, signature in _REQUIRED_INDEXES[table].items()
         if actual_indexes.get(name) != signature
     ]
-    if _partitions(cursor, database, table).get("p_future") != "MAXVALUE":
+    future_partition = _partitions(cursor, database, table).get("p_future")
+    if future_partition is None or future_partition[0] != "MAXVALUE":
         issues.append("partition p_future must use MAXVALUE")
+    if future_partition is not None and future_partition[1:] != (
+        "RANGE COLUMNS",
+        "create_date",
+    ):
+        issues.append("partitioning must use RANGE COLUMNS(create_date)")
     return issues
 
 

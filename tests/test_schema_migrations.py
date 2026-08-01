@@ -61,7 +61,7 @@ class ManagedObjectCursor:
         self.columns: dict[str, list[str]] = {}
         self.scales: dict[tuple[str, str], int | None] = {}
         self.indexes: dict[str, dict[str, tuple[int, tuple[str, ...]]]] = {}
-        self.partitions: dict[str, dict[str, str]] = {}
+        self.partitions: dict[str, dict[str, tuple[str, str, str]]] = {}
         self.views: set[str] = set()
         self.view_definitions: dict[str, str] = {}
         self.statements: list[str] = []
@@ -94,7 +94,18 @@ class ManagedObjectCursor:
         if "information_schema.partitions" in lowered:
             assert isinstance(params, tuple)
             table = str(params[-1])
-            self.result = list(self.partitions.get(table, {}).items())
+            if "partition_method" in lowered:
+                self.result = [
+                    (name, description, method, expression)
+                    for name, (description, method, expression) in self.partitions.get(
+                        table, {}
+                    ).items()
+                ]
+            else:
+                self.result = [
+                    (name, description)
+                    for name, (description, _, _) in self.partitions.get(table, {}).items()
+                ]
             return
         if "information_schema.views" in lowered:
             assert isinstance(params, tuple)
@@ -141,8 +152,15 @@ class ManagedObjectCursor:
                     )
                     indexes[index_name] = (non_unique, index_columns)
                 self.indexes[table] = indexes
+                partitioning = re.search(
+                    r"PARTITION BY\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s*\(([^)]+)\)",
+                    statement,
+                    re.IGNORECASE,
+                )
+                method = partitioning.group(1).upper() if partitioning else ""
+                expression = partitioning.group(2) if partitioning else ""
                 self.partitions[table] = {
-                    match.group(1): match.group(2).upper()
+                    match.group(1): (match.group(2).upper(), method, expression)
                     for line in statement.splitlines()
                     if (
                         match := re.match(
@@ -312,6 +330,47 @@ def test_auxiliary_migration_rejects_missing_maxvalue_partition(table: str) -> N
     assert not migration.is_satisfied(cursor, "warehouse")
     with pytest.raises(RuntimeError, match=r"p_future.*MAXVALUE.*manual repair"):
         migration.apply(cursor, "warehouse")
+
+
+@pytest.mark.parametrize(
+    ("method", "expression"),
+    (
+        ("HASH", "create_date"),
+        ("RANGE COLUMNS", "other_date"),
+    ),
+)
+@pytest.mark.parametrize("table", ("erp_data", "customer_account"))
+def test_auxiliary_migration_rejects_wrong_partition_method_or_expression(
+    table: str,
+    method: str,
+    expression: str,
+) -> None:
+    migration = _discovered_migration(3)
+    cursor = ManagedObjectCursor()
+    migration.apply(cursor, "warehouse")
+    description, _, _ = cursor.partitions[table]["p_future"]
+    cursor.partitions[table]["p_future"] = (description, method, expression)
+
+    assert not migration.is_satisfied(cursor, "warehouse")
+    with pytest.raises(
+        RuntimeError,
+        match=r"RANGE COLUMNS.*create_date.*manual repair",
+    ):
+        migration.apply(cursor, "warehouse")
+
+
+@pytest.mark.parametrize("table", ("erp_data", "customer_account"))
+def test_auxiliary_migration_normalizes_mysql_partition_metadata(table: str) -> None:
+    migration = _discovered_migration(3)
+    cursor = ManagedObjectCursor()
+    migration.apply(cursor, "warehouse")
+    cursor.partitions[table]["p_future"] = (
+        " MAXVALUE ",
+        " range   columns ",
+        " ( `create_date` ) ",
+    )
+
+    assert migration.is_satisfied(cursor, "warehouse")
 
 
 def test_revenue_migration_replaces_same_name_stale_view_with_stable_marker() -> None:
