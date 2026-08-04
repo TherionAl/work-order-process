@@ -65,7 +65,7 @@ def build_customer_row(record: dict[str, Any], source_flag: str) -> dict[str, An
             first_value(record, "customerType", "customer_type", "rank", "type", "nature")
         ),
         "province": text_or_none(
-            first_value(record, "province", "provinceName", "area", "areaName")
+            first_value(record, "province", "provinceName", "area", "areaName", "userGroup")
         ),
         "city": text_or_none(first_value(record, "city", "cityName", "area2", "area2Name")),
         "district": text_or_none(
