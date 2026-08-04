@@ -6,7 +6,9 @@
 - 每天 02:17：当月 + 前溯 3 个月（覆盖近 ~90-120 天内可能被修改的工单）。
   工单创建后短期内 updateDT 会变化（状态流转、解决/关单等），90 天内大概率还在变动，
   因此每日轮询检测 source_updated_at 并 upsert 有变化的工单。
-- 每周日 03:17：全量导入客户/公司 + 联系人。
+- 每天 03:17：客户/公司全量同步（page_size=500）+ 联系人增量同步（updated_start 过滤）。
+  联系人 API 支持 updated_start 过滤，每天只同步最近 24h 变更的记录（~100-200 条）。
+  公司 API 不支持按更新时间过滤，每天全量同步（page_size=500，~1500 次 API 调用）。
 - 每月 1 号 04:17：创建后续 6 个月分区 + 刷新当年 90 天前的老月份。
   90 天前的工单基本趋于稳定，每月补一次即可；按 cutoff 切割当年/去年范围。
 
@@ -19,8 +21,9 @@ from __future__ import annotations
 
 import logging
 import signal
+import threading
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -151,13 +154,63 @@ def job_sync_tickets_daily() -> None:
 
 
 def job_sync_customers_contacts() -> None:
-    """每周日 03:17：导入客户/公司 + 联系人。"""
+    """每天 03:17：客户/公司全量同步 + 联系人增量同步（并行）。"""
     logger.info("定时任务: sync_customers_contacts")
     settings, _ = _runtime()
-    with WorkOrderClient(settings) as client:
-        client.authenticate()
-        import_customers_to_mysql(settings.mysql, client)
-        import_contacts_to_mysql(settings.mysql, client)
+
+    # 计算增量同步的时间窗口（默认前 1 天）
+    lookback_days = settings.sync_lookback_days
+    updated_since = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    contact_extra_params = {"updated_start": updated_since}
+    logger.info("联系人增量同步: updated_start=%s", updated_since)
+
+    # 客户/公司和联系人并行同步
+    errors: list[str] = []
+
+    def sync_customers() -> None:
+        try:
+            with WorkOrderClient(settings) as client:
+                client.authenticate()
+                report = import_customers_to_mysql(settings.mysql, client)
+                logger.info(
+                    "客户/公司同步完成: total=%d, inserted=%d, changed=%d, unchanged=%d",
+                    report.get("total", 0),
+                    report.get("inserted", 0),
+                    report.get("changed", 0),
+                    report.get("unchanged", 0),
+                )
+        except Exception as exc:
+            logger.exception("客户/公司同步异常")
+            errors.append(f"customers: {exc}")
+
+    def sync_contacts() -> None:
+        try:
+            with WorkOrderClient(settings) as client:
+                client.authenticate()
+                report = import_contacts_to_mysql(
+                    settings.mysql, client, extra_params=contact_extra_params
+                )
+                logger.info(
+                    "联系人增量同步完成: total=%d, inserted=%d, changed=%d, unchanged=%d",
+                    report.get("total", 0),
+                    report.get("inserted", 0),
+                    report.get("changed", 0),
+                    report.get("unchanged", 0),
+                )
+        except Exception as exc:
+            logger.exception("联系人同步异常")
+            errors.append(f"contacts: {exc}")
+
+    # 启动两个线程并行执行
+    customer_thread = threading.Thread(target=sync_customers, name="sync-customers")
+    contact_thread = threading.Thread(target=sync_contacts, name="sync-contacts")
+    customer_thread.start()
+    contact_thread.start()
+    customer_thread.join()
+    contact_thread.join()
+
+    if errors:
+        raise ScheduledSyncError("; ".join(errors))
 
 
 def job_monthly_maintenance() -> None:
@@ -191,7 +244,7 @@ def main() -> None:
     )
     sched.add_job(
         job_sync_customers_contacts,
-        CronTrigger(day_of_week="sun", hour=3, minute=17),
+        CronTrigger(hour=3, minute=17),
         id="sync_customers_contacts",
         name="客户与联系人同步",
     )
@@ -214,7 +267,7 @@ def main() -> None:
     logger.info("调度器启动 (Asia/Shanghai)。")
     logger.info("任务规则:")
     logger.info("  02:17 每天  = 当月 + 前溯 3 个月 (~90天)")
-    logger.info("  03:17 周日  = 全量客户/联系人")
+    logger.info("  03:17 每天  = 客户/公司全量 + 联系人增量（并行）")
     logger.info("  04:17 每月1号 = 当年90天前老月份 + 分区维护")
     try:
         sched.start()

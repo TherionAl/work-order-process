@@ -996,6 +996,7 @@ def import_contacts_to_mysql(
     sources: Iterable[str] = ("contacts",),
     require_nonempty: bool = True,
     max_records: int | None = None,
+    extra_params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """拉取联系人列表，upsert 到 contacts 表。"""
 
@@ -1007,6 +1008,7 @@ def import_contacts_to_mysql(
         sources=sources,
         require_nonempty=require_nonempty,
         max_records=max_records,
+        extra_params=extra_params,
     )
     return {
         "total": report.fetched,

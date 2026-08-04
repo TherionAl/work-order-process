@@ -71,6 +71,7 @@ class Settings:
     max_pages: int
     ticket_since: str
     sample_size: int
+    sync_lookback_days: int
     endpoint: EndpointConfig
     mysql: MySQLConfig
 
@@ -140,10 +141,11 @@ def load_settings() -> Settings:
         base_url=base_url,
         dictionary_path=Path(os.getenv("WORKORDER_DICTIONARY_PATH", str(DEFAULT_DICTIONARY_PATH))),
         output_dir=Path(os.getenv("WORKORDER_OUTPUT_DIR", str(DEFAULT_OUTPUT_DIR))),
-        page_size=int(os.getenv("WORKORDER_PAGE_SIZE", "100")),
+        page_size=int(os.getenv("WORKORDER_PAGE_SIZE", "500")),
         max_pages=int(os.getenv("WORKORDER_MAX_PAGES", "200")),
         ticket_since=os.getenv("WORKORDER_TICKET_SINCE", "2025-01-01"),
         sample_size=int(os.getenv("WORKORDER_SAMPLE_SIZE", "10")),
+        sync_lookback_days=int(os.getenv("WORKORDER_SYNC_LOOKBACK_DAYS", "1")),
         endpoint=endpoint,
         mysql=MySQLConfig(
             host=os.getenv("WORKORDER_MYSQL_HOST", "127.0.0.1"),

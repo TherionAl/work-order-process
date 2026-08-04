@@ -300,17 +300,19 @@ class WorkOrderClient:
 
         return self.fetch_all(self.settings.endpoint.contact_paths)
 
-    def iter_companies(self) -> Iterator[list[dict]]:
+    def iter_companies(self, extra_params: dict[str, Any] | None = None) -> Iterator[list[dict]]:
         """Yield company rows page by page for large imports."""
 
         return self.iter_entity_pages(
-            self.settings.endpoint.customer_paths, self.settings.page_size
+            self.settings.endpoint.customer_paths, self.settings.page_size, extra_params
         )
 
-    def iter_contacts(self) -> Iterator[list[dict]]:
+    def iter_contacts(self, extra_params: dict[str, Any] | None = None) -> Iterator[list[dict]]:
         """Yield contact rows page by page for large imports."""
 
-        return self.iter_entity_pages(self.settings.endpoint.contact_paths, self.settings.page_size)
+        return self.iter_entity_pages(
+            self.settings.endpoint.contact_paths, self.settings.page_size, extra_params
+        )
 
     def fetch_contact_detail(self, contact_id: str) -> dict | None:
         """按联系人主键读取联系人详情，用于把 custUserId 替换为联系人姓名。"""
@@ -715,7 +717,12 @@ class WorkOrderClient:
                 break
         return items
 
-    def iter_entity_pages(self, paths: list[str], page_size: int) -> Iterator[list[dict]]:
+    def iter_entity_pages(
+        self,
+        paths: list[str],
+        page_size: int,
+        extra_params: dict[str, Any] | None = None,
+    ) -> Iterator[list[dict]]:
         """Yield the first non-empty configured entity endpoint one page at a time."""
 
         errors: list[str] = []
@@ -731,6 +738,7 @@ class WorkOrderClient:
                         "current": page,
                         "pageSize": page_size,
                         "limit": page_size,
+                        **(extra_params or {}),
                     }
                     response = self._first_successful_request(path, params)
                     if not _looks_successful(response):

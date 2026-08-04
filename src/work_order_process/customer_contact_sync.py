@@ -362,6 +362,7 @@ def sync_customer_entities(
     require_nonempty: bool = True,
     max_records: int | None = None,
     store: Any | None = None,
+    extra_params: dict[str, Any] | None = None,
 ) -> SyncReport:
     return _sync_entities(
         config,
@@ -371,6 +372,7 @@ def sync_customer_entities(
         require_nonempty=require_nonempty,
         max_records=max_records,
         store=store,
+        extra_params=extra_params,
     )
 
 
@@ -382,6 +384,7 @@ def sync_contact_entities(
     require_nonempty: bool = True,
     max_records: int | None = None,
     store: Any | None = None,
+    extra_params: dict[str, Any] | None = None,
 ) -> SyncReport:
     return _sync_entities(
         config,
@@ -391,6 +394,7 @@ def sync_contact_entities(
         require_nonempty=require_nonempty,
         max_records=max_records,
         store=store,
+        extra_params=extra_params,
     )
 
 
@@ -403,6 +407,7 @@ def _sync_entities(
     require_nonempty: bool,
     max_records: int | None,
     store: Any | None,
+    extra_params: dict[str, Any] | None = None,
 ) -> SyncReport:
     owns_store = store is None
     if store is None:
@@ -417,7 +422,7 @@ def _sync_entities(
         seen_ids: set[str] = set()
         saw_record = False
         for source in sources:
-            for page in _iter_source_pages(client, entity_type, source):
+            for page in _iter_source_pages(client, entity_type, source, extra_params):
                 prepared: list[dict[str, Any]] = []
                 for source_row, record in enumerate(page, start=1):
                     saw_record = True
@@ -492,7 +497,10 @@ def _sync_entities(
 
 
 def _iter_source_pages(
-    client: Any, entity_type: str, source: str
+    client: Any,
+    entity_type: str,
+    source: str,
+    extra_params: dict[str, Any] | None = None,
 ) -> Iterator[list[dict[str, Any]]]:
     methods = {
         ("customer", "companies"): ("iter_companies", "fetch_companies"),
@@ -506,7 +514,7 @@ def _iter_source_pages(
         raise ValueError(f"Unsupported {entity_type} source: {source}")
     iter_method, fetch_method = method_names
     if hasattr(client, iter_method):
-        yield from getattr(client, iter_method)()
+        yield from getattr(client, iter_method)(extra_params)
         return
     yield list(getattr(client, fetch_method)())
 
