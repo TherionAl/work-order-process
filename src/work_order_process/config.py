@@ -142,7 +142,7 @@ def load_settings() -> Settings:
         dictionary_path=Path(os.getenv("WORKORDER_DICTIONARY_PATH", str(DEFAULT_DICTIONARY_PATH))),
         output_dir=Path(os.getenv("WORKORDER_OUTPUT_DIR", str(DEFAULT_OUTPUT_DIR))),
         page_size=int(os.getenv("WORKORDER_PAGE_SIZE", "500")),
-        max_pages=int(os.getenv("WORKORDER_MAX_PAGES", "200")),
+        max_pages=int(os.getenv("WORKORDER_MAX_PAGES", "10000")),
         ticket_since=os.getenv("WORKORDER_TICKET_SINCE", "2025-01-01"),
         sample_size=int(os.getenv("WORKORDER_SAMPLE_SIZE", "10")),
         sync_lookback_days=int(os.getenv("WORKORDER_SYNC_LOOKBACK_DAYS", "1")),
