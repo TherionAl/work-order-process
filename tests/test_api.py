@@ -18,6 +18,7 @@ def _settings() -> Settings:
         max_pages=10,
         ticket_since="2025-01-01",
         sample_size=3,
+        sync_lookback_days=1,
         endpoint=EndpointConfig(
             customer_paths=["/companies"],
             contact_paths=["/users"],

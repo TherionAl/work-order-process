@@ -353,6 +353,32 @@ class WorkOrderClient:
             return ticket[0] if ticket else None
         return ticket if isinstance(ticket, dict) else None
 
+    def update_ticket_custom_field(
+        self, ticket_id: str, field_key: str, option_value: str
+    ) -> dict[str, Any]:
+        """Update exactly one ticket custom-field dropdown option.
+
+        This deliberately uses the ticket API's JSON PUT contract rather than
+        the list-endpoint GET/POST fallback.  Callers must read and verify the
+        ticket themselves before using this write operation.
+        """
+
+        payload = {
+            "ticket": {
+                "custom_fields": [
+                    {
+                        "key": field_key,
+                        "value": option_value,
+                    }
+                ]
+            }
+        }
+        response = self._request("PUT", f"/tickets/{ticket_id}.json", payload)
+        if not _looks_successful(response):
+            raise ApiError(f"HTTP {response.status_code}: {response.text[:300]}")
+        body = _json_or_empty(response)
+        return body if isinstance(body, dict) else {}
+
     def search_tickets_by_create_month(
         self, month_label: str, page: int = 1, per_page: int = 1000
     ) -> dict[str, Any]:

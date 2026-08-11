@@ -779,6 +779,8 @@ uv run --all-groups work_order_process metric-ticket `
 | `work_order_process.revenue_summary` | 营收目标、指标、写库和 Excel | Excel、MySQL |
 | `work_order_process.business_time` | 工作日历和工作时长 | 读 JSON |
 | `work_order_process.time_metrics` | 月度/单工单节点时长 | MySQL 只读、JSON |
+| `work_order_process.hubei_analysis` | 湖北专项报表筛选、版本字段关联和重复判定 | MySQL 只读辅助逻辑 |
+| `work_order_process.ticket_writeback` | 合规抽检结论解析、写入计划和现值判定 | 读取 Excel 的纯辅助逻辑 |
 | `work_order_process.daily_runner` | 生产定时任务 | API、MySQL、日志 |
 | `work_order_process.io` | UTF-8 JSON 写入 | 文件 |
 
@@ -856,7 +858,7 @@ with WorkOrderClient(settings) as client:
 | `prefetch_entities()` | 批量预热实体详情缓存 |
 | `clear_cache()` | 清除详情 LRU 缓存 |
 
-`_request()` 尝试配置的 HTTP 方法；`_json_or_empty()` 会修复接口文本中不合法的裸反斜杠
+`update_ticket_custom_field()` 仅通过 JSON `PUT` 更新指定工单的一个下拉自定义字段；调用方必须先读取当前值，写后再回读核验。`_request()` 尝试配置的 HTTP 方法；`_json_or_empty()` 会修复接口文本中不合法的裸反斜杠
 再解析 JSON。不要在日志中打印完整响应，响应可能包含客户个人信息。
 
 #### 受控重试：`work_order_process.api_transport`
@@ -1053,7 +1055,7 @@ ERP 发布总控：
 - `work_order_process.api_transport.ApiTransportError`：不支持的 HTTP 方法错误。
 - `work_order_process.api_transport.RetryPolicy`：重试次数、状态码和退避参数。
 - `work_order_process.api_transport.retry_delay`：优先解析 `Retry-After`，否则计算有上限的指数退避与抖动。
-- `work_order_process.api_transport.request_with_retry`：按 GET 查询参数和 POST 表单数据发送请求，并仅重试瞬时错误。
+- `work_order_process.api_transport.request_with_retry`：按 GET 查询参数、POST 表单数据或 PUT JSON 发送请求，并仅重试瞬时错误。
 - `work_order_process.api_transport._send_request`：按 HTTP 方法调用客户端。
 - `work_order_process.api_transport._retry_after_seconds`：解析合法的 `Retry-After` 秒数。
 
@@ -1308,6 +1310,7 @@ ERP 发布总控：
 - `work_order_process.structured_entities.require_text`：主键非空检查。
 - `work_order_process.structured_entities.text_or_none`：文本转换。
 - `work_order_process.structured_entities.parse_datetime`：接口时间解析。
+- `work_order_process.structured_entities.parse_region_from_address`：从地址文本补充识别城市和区县。
 
 #### 客户联系人同步：`work_order_process.customer_contact_sync`
 
@@ -1494,6 +1497,35 @@ ERP 发布总控：
 - `work_order_process.time_metrics._empty_to_none`：空值规范化。
 - `work_order_process.time_metrics._connect_kwargs`：MySQL 连接参数。
 - `work_order_process.time_metrics._pymysql`：延迟导入驱动。
+
+#### 湖北专项分析：`work_order_process.hubei_analysis`
+
+- `work_order_process.hubei_analysis.AnalysisScope`：湖北专项报表的可复现筛选条件；时间范围为 `[start, end)`。
+- `work_order_process.hubei_analysis.add_scope_arguments`：为专项脚本注册时间、省份、服务目录、输出目录和数量上限参数。
+- `work_order_process.hubei_analysis.scope_from_arguments`：构造默认近 30 天或命令行指定的筛选范围。
+- `work_order_process.hubei_analysis.mysql_config_from_environment`：从项目 `.env` 读取 MySQL 连接配置。
+- `work_order_process.hubei_analysis.build_ticket_version_predicate`：生成 `(ticket_id, create_dt)` 成对查询条件。
+- `work_order_process.hubei_analysis.index_custom_fields_by_ticket_version`：按工单 ID 与创建时间索引自定义字段，避免跨版本混用。
+- `work_order_process.hubei_analysis.mark_duplicate_results`：仅在同日、同客户、同标题且描述相似时标记后续重复工单。
+- `work_order_process.hubei_analysis._parse_datetime`：解析命令行 ISO-8601 时间。
+- `work_order_process.hubei_analysis._positive_int`：校验正整数参数。
+- `work_order_process.hubei_analysis._normalize`：标准化客户、标题和描述文本。
+- `work_order_process.hubei_analysis._strip_numbers`：移除描述中的数字，用于“仅编号不同”例外识别。
+- `work_order_process.hubei_analysis._similarity`：计算标准化描述相似度。
+
+#### 抽检结论回写：`work_order_process.ticket_writeback`
+
+- `work_order_process.ticket_writeback`：从合规检查报告构造不覆盖已有结果的工单字段回写计划。
+- `work_order_process.ticket_writeback.ReportScope`：报告生成时写入的机器可读执行范围。
+- `work_order_process.ticket_writeback.SamplingStatusSource`：检查报告中单条工单的合规结论。
+- `work_order_process.ticket_writeback.SamplingStatusPlan`：包含目标下拉选项与写入/跳过动作的预检计划项。
+- `work_order_process.ticket_writeback.load_sampling_status_sources`：读取 Excel `工单详情` 页的工单 ID 和合规结论。
+- `work_order_process.ticket_writeback.load_report_scope`：读取回写前必需的报告类型和省份范围。
+- `work_order_process.ticket_writeback.assert_hubei_writeback_scope`：拒绝非湖北省或非湖北专项报告的回写。
+- `work_order_process.ticket_writeback.current_custom_field_value`：从工单详情读取指定自定义字段的当前原始值。
+- `work_order_process.ticket_writeback.build_sampling_status_plan`：把合规结论映射为下拉选项，并跳过已有非占位值的工单。
+- `work_order_process.ticket_writeback.build_failure_reason_plan`：仅为不合规且“检查不通过原因”为空的工单生成文本回写计划。
+- `work_order_process.ticket_writeback._failure_reason_from_report_row`：根据报告中未通过的检查项拼接不带规则编号前缀的原因文本。
 
 #### 定时器：`work_order_process.daily_runner`
 

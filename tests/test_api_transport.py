@@ -21,6 +21,9 @@ class ScriptedHTTPClient:
     def post(self, path: str, *, data: dict[str, object]) -> httpx.Response:
         return self._request("POST", path, data)
 
+    def put(self, path: str, *, json: dict[str, object]) -> httpx.Response:
+        return self._request("PUT", path, json)
+
     def _request(self, method: str, path: str, data: dict[str, object]) -> httpx.Response:
         self.calls += 1
         self.requests.append((method, path, data))
@@ -113,6 +116,16 @@ def test_post_sends_data_as_a_form() -> None:
 
     assert response.status_code == 200
     assert client.requests == [("POST", "/tickets", {"subject": "example"})]
+
+
+def test_put_sends_data_as_json() -> None:
+    client = ScriptedHTTPClient([httpx.Response(200)])
+    payload = {"ticket": {"custom_fields": [{"key": "field_1447", "value": "4328151"}]}}
+
+    response = request_with_retry(client, "PUT", "/tickets/T1.json", payload)
+
+    assert response.status_code == 200
+    assert client.requests == [("PUT", "/tickets/T1.json", payload)]
 
 
 def test_unsupported_method_is_rejected_without_a_request() -> None:

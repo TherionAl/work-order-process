@@ -77,7 +77,7 @@ def test_empty_customer_result_fails_batch_without_writes() -> None:
 
 
 class PagedClient:
-    def iter_companies(self):
+    def iter_companies(self, _extra_params=None):
         yield [{"uId": "C1", "companyName": "One"}, {"uId": "C2", "companyName": "Two"}]
         yield [{"uId": "C3", "companyName": "Three"}]
 
@@ -109,7 +109,7 @@ def test_customer_sync_uses_paged_bulk_writes_and_respects_limit() -> None:
 
 
 class InvalidRecordClient:
-    def iter_companies(self):
+    def iter_companies(self, _extra_params=None):
         yield [{"uId": "", "companyName": "missing stable id"}]
 
 
@@ -158,7 +158,7 @@ def test_bulk_fallback_records_only_final_row_failure() -> None:
 
 
 class LaterPageFailureClient:
-    def iter_companies(self):
+    def iter_companies(self, _extra_params=None):
         yield [
             {"uId": "C1", "companyName": "One"},
             {"uId": "", "companyName": "missing stable id"},
@@ -188,7 +188,7 @@ def test_later_api_failure_preserves_prior_entity_counts_and_failures() -> None:
 
 
 class ContactClient:
-    def iter_contacts(self):
+    def iter_contacts(self, _extra_params=None):
         yield [
             {"cId": "U1", "name": "张三", "companyId": "C1"},
             {"cId": "U1", "name": "重复记录", "companyId": "C1"},

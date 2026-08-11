@@ -56,9 +56,9 @@ def request_with_retry(
     sleep: Callable[[float], None] = time.sleep,
     random_value: Callable[[], float] = random.random,
 ) -> httpx.Response:
-    """Send a GET or form POST, retrying only transient transport failures."""
+    """Send a GET, form POST, or JSON PUT with bounded transient retries."""
 
-    if method not in {"GET", "POST"}:
+    if method not in {"GET", "POST", "PUT"}:
         raise ApiTransportError(f"Unsupported HTTP method: {method}")
 
     for attempt in range(1, policy.max_attempts + 1):
@@ -84,7 +84,9 @@ def _send_request(
 ) -> httpx.Response:
     if method == "GET":
         return client.get(path, params=data)
-    return client.post(path, data=data)
+    if method == "POST":
+        return client.post(path, data=data)
+    return client.put(path, json=data)
 
 
 def _retry_after_seconds(response: httpx.Response) -> float | None:

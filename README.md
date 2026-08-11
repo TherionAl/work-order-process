@@ -153,6 +153,50 @@ uv run work_order_process mysql-add-partitions --months-ahead 6
 uv run work_order_process mysql-sync-log --log-limit 20
 ```
 
+## 湖北生产环境异常工单分析
+
+以下专项脚本只执行 MySQL `SELECT`，不会在运行时创建、修改或删除生产表；Excel 报表写入
+本地 `output/`（该目录已被 Git 忽略）。报表包含工单正文、联系人和客户信息，应按内部数据
+规范保存和传递。
+
+导出工单明细。默认范围是运行时刻往前 30 天；时间使用 `[start, end)`，即开始时间包含、结束
+时间不包含。自定义字段始终按工单 ID 与创建时间成对关联，避免混入同一工单的其他版本。
+
+```powershell
+uv run python scripts/export_hubei_prod_exception.py `
+  --start 2026-08-01T00:00:00 `
+  --end 2026-09-01T00:00:00 `
+  --output-dir output/hubei_prod_exception
+```
+
+执行内容合规检查。重复工单只会在同日、同客户、同标题且问题描述相似度达到 80% 时标记；
+客户或标题为空的记录不参与重复判定。
+
+```powershell
+uv run python scripts/compliance_check.py `
+  --start 2026-08-01T00:00:00 `
+  --end 2026-09-01T00:00:00 `
+  --limit 500
+```
+
+两份报表都可使用 `--province`、`--service-catalog-contains`、`--output-dir` 和 `--limit` 覆盖
+默认值；先运行 `--help` 查看完整参数。`scripts/explore_hubei_data*.py` 与
+`scripts/check_service_catalog.py` 是只读字段探查工具，不作为正式报表入口。
+
+将合规检查结论回写到工单时，默认只做预演；明确增加 `--apply` 才会写入。回写脚本强制
+校验报告中的机器可读范围，只接受报告类型为湖北专项且省份为“湖北省”的新报告；旧报告、
+缺少范围页或其他省份的报告都会在调用接口前被拒绝。已有非空结果不会覆盖，写入后会逐条
+回读验证并在 `output/compliance_writeback/` 保存 JSONL 审计记录。
+
+```powershell
+uv run python scripts/apply_hubei_sampling_status.py `
+  --input output/compliance_check/故障单合规性检查_YYYYMMDD_HHMMSS.xlsx
+
+uv run python scripts/apply_hubei_sampling_status.py `
+  --input output/compliance_check/故障单合规性检查_YYYYMMDD_HHMMSS.xlsx `
+  --apply
+```
+
 ## ERP、客户台账和营收
 
 将新旧 ERP 原始文件直接合并、计算 2026 年度分摊、原子写入数据库，再从数据库导出

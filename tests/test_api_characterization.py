@@ -36,6 +36,7 @@ def _settings(
         max_pages=max_pages,
         ticket_since="2025-01-01",
         sample_size=3,
+        sync_lookback_days=1,
         endpoint=EndpointConfig(
             customer_paths=["/companies"],
             contact_paths=["/users"],
@@ -213,6 +214,26 @@ def test_detail_and_search_endpoints_extract_domain_values_and_request_parameter
             },
         ),
     ]
+
+
+def test_update_ticket_custom_field_uses_a_json_put_for_one_field() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ticket": {"ticketId": "T1"}})
+
+    with _client(handler) as client:
+        result = client.update_ticket_custom_field("T1", "field_1447", "4328151")
+
+    assert result == {"ticket": {"ticketId": "T1"}}
+    assert len(requests) == 1
+    assert requests[0].method == "PUT"
+    assert requests[0].url.path == "/api/v1/tickets/T1.json"
+    assert requests[0].headers["content-type"] == "application/json"
+    assert json.loads(requests[0].content) == {
+        "ticket": {"custom_fields": [{"key": "field_1447", "value": "4328151"}]}
+    }
 
 
 def test_field_and_template_envelopes_filter_non_mapping_items_and_cache_fields() -> None:
