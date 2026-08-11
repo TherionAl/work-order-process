@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from calendar import monthrange
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -13,6 +14,8 @@ from .config import PROJECT_ROOT
 from .hubei_analysis import DEFAULT_PROVINCE
 
 WEEKLY_RUN_DAYS = frozenset({8, 15, 22, 29})
+SCHEDULE_HOUR = 5
+SCHEDULE_MINUTE = 17
 
 
 @dataclass(frozen=True)
@@ -52,19 +55,38 @@ def scheduled_window(period: str, run_at: datetime) -> QualityWindow:
 def most_recent_scheduled_at(period: str, run_at: datetime) -> datetime:
     """Return the latest nominal execution time at or before ``run_at``."""
 
-    midnight = run_at.replace(hour=0, minute=0, second=0, microsecond=0)
+    month_start = run_at.replace(
+        day=1,
+        hour=SCHEDULE_HOUR,
+        minute=SCHEDULE_MINUTE,
+        second=0,
+        microsecond=0,
+    )
     if period == "monthly":
-        return midnight.replace(day=1)
+        if month_start <= run_at:
+            return month_start
+        return (month_start - timedelta(days=1)).replace(day=1)
     if period != "weekly":
         raise ValueError(f"不支持的湖北质检周期: {period}")
 
-    current_candidates = [day for day in WEEKLY_RUN_DAYS if day <= run_at.day]
+    current_candidates = [
+        month_start.replace(day=day)
+        for day in WEEKLY_RUN_DAYS
+        if day <= monthrange(month_start.year, month_start.month)[1]
+        and month_start.replace(day=day) <= run_at
+    ]
     if current_candidates:
-        return midnight.replace(day=max(current_candidates))
+        return max(current_candidates)
 
-    previous_month_last_day = midnight.replace(day=1) - timedelta(days=1)
+    previous_month_last_day = month_start - timedelta(days=1)
     previous_candidates = [day for day in WEEKLY_RUN_DAYS if day <= previous_month_last_day.day]
-    return previous_month_last_day.replace(day=max(previous_candidates))
+    return previous_month_last_day.replace(
+        day=max(previous_candidates),
+        hour=SCHEDULE_HOUR,
+        minute=SCHEDULE_MINUTE,
+        second=0,
+        microsecond=0,
+    )
 
 
 def run_scheduled_quality(

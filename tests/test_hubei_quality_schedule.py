@@ -130,3 +130,45 @@ def test_monthly_catch_up_uses_the_most_recent_first_day_window(tmp_path: Path) 
 
     assert commands[0][commands[0].index("--start") + 1] == "2026-07-01 00:00:00"
     assert commands[0][commands[0].index("--end") + 1] == "2026-08-01 00:00:00"
+
+
+@pytest.mark.parametrize(
+    ("period", "run_at", "expected_start", "expected_end"),
+    [
+        (
+            "weekly",
+            datetime(2026, 8, 15, 5, 16),
+            "2026-08-01 00:00:00",
+            "2026-08-08 00:00:00",
+        ),
+        (
+            "monthly",
+            datetime(2026, 8, 1, 5, 16),
+            "2026-06-01 00:00:00",
+            "2026-07-01 00:00:00",
+        ),
+    ],
+)
+def test_catch_up_never_selects_a_0517_schedule_before_it_occurs(
+    tmp_path: Path,
+    period: str,
+    run_at: datetime,
+    expected_start: str,
+    expected_end: str,
+) -> None:
+    commands: list[list[str]] = []
+
+    def record(command: list[str], *, cwd: Path, check: bool) -> None:
+        commands.append(command)
+
+    run_scheduled_quality(
+        period,
+        run_at=run_at,
+        allow_catch_up=True,
+        project_root=tmp_path,
+        python_executable="python-test",
+        run_command=record,
+    )
+
+    assert commands[0][commands[0].index("--start") + 1] == expected_start
+    assert commands[0][commands[0].index("--end") + 1] == expected_end

@@ -53,6 +53,26 @@ journalctl -u work-order-daily.service -n 100 --no-pager
 
 数据库侧检查最近的 `sync_task_log`，不能只以 APScheduler 的 executed successfully 作为成功依据。
 
+## 湖北质检 timer
+
+湖北周检和月结使用独立 oneshot service，并通过同一把 `flock` 串行执行。安装 unit 前必须先
+创建可写的输出目录；新 release 中 `output/` 被 Git 忽略，不能假定它随代码存在：
+
+```bash
+install -d -m 0750 -o workorder -g workorder /opt/work_order_process/output
+install -m 0644 deploy/work-order-hubei-quality-weekly.service /etc/systemd/system/
+install -m 0644 deploy/work-order-hubei-quality-weekly.timer /etc/systemd/system/
+install -m 0644 deploy/work-order-hubei-quality-monthly.service /etc/systemd/system/
+install -m 0644 deploy/work-order-hubei-quality-monthly.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now work-order-hubei-quality-weekly.timer
+systemctl enable --now work-order-hubei-quality-monthly.timer
+```
+
+模板路径和账号必须先按实际 release 布局调整。部署后使用 `systemctl list-timers` 核对下次
+执行时刻，并检查两个 timer 均为 active/enabled。不要以手工启动带 `--apply` 的 service
+作为只读验收；只读验收应直接运行调度脚本且不传 `--apply`。
+
 ## 版本化结构迁移
 
 `mysql-schema-status` 只读报告 `schema_version`、待办版本和 checksum 漂移；它不建表、

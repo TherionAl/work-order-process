@@ -8,11 +8,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from work_order_process.api import ApiError, WorkOrderClient
 from work_order_process.config import PROJECT_ROOT, load_settings
 from work_order_process.ticket_writeback import (
     FAILURE_REASON_FIELD_KEY,
     SAMPLING_STATUS_FIELD_KEY,
+    UNSET_OPTION_VALUES,
     assert_hubei_writeback_scope,
     assert_monthly_overwrite_scope,
     build_failure_reason_plan,
@@ -125,8 +128,23 @@ def main(argv: list[str] | None = None) -> int:
             print("当前为预演模式，未调用写入接口。使用 --apply 才会实际回写。")
             return 0
 
-        _apply_plan(client, status_plan, SAMPLING_STATUS_FIELD_KEY, audit_path, "status")
-        _apply_plan(client, reason_plan, FAILURE_REASON_FIELD_KEY, audit_path, "failure_reason")
+        protect_existing = not args.overwrite_existing
+        _apply_plan(
+            client,
+            status_plan,
+            SAMPLING_STATUS_FIELD_KEY,
+            audit_path,
+            "status",
+            protect_existing=protect_existing,
+        )
+        _apply_plan(
+            client,
+            reason_plan,
+            FAILURE_REASON_FIELD_KEY,
+            audit_path,
+            "failure_reason",
+            protect_existing=protect_existing,
+        )
 
     print("所有待写入字段均已回写并通过回读验证。")
     return 0
@@ -138,6 +156,8 @@ def _apply_plan(
     field_key: str,
     audit_path: Path,
     field_label: str,
+    *,
+    protect_existing: bool,
 ) -> None:
     for item in plan:
         if item.action != "update":
@@ -152,18 +172,47 @@ def _apply_plan(
             )
             continue
 
+        current_value = item.current_value
+        stage = "prewrite_check"
         try:
+            if protect_existing:
+                current_detail = client.fetch_ticket_detail(item.ticket_id)
+                current_value = current_custom_field_value(current_detail, field_key)
+                slot_is_unset = (
+                    (current_value or "") in UNSET_OPTION_VALUES
+                    if field_key == SAMPLING_STATUS_FIELD_KEY
+                    else not (current_value or "").strip()
+                )
+                if not slot_is_unset:
+                    _append_audit(
+                        audit_path,
+                        {
+                            "event": "skipped_changed_after_preflight",
+                            "field_key": field_key,
+                            "ticket_id": item.ticket_id,
+                            "preflight_value": item.current_value,
+                            "current_value": current_value,
+                            "target_value": item.target_value,
+                        },
+                    )
+                    continue
+
+            stage = "write"
             client.update_ticket_custom_field(item.ticket_id, field_key, item.target_value)
+            stage = "verify"
             verified_detail = client.fetch_ticket_detail(item.ticket_id)
             verified_value = current_custom_field_value(verified_detail, field_key)
-        except ApiError as exc:
+        except (ApiError, httpx.HTTPError) as exc:
             _append_audit(
                 audit_path,
                 {
                     "event": "write_error",
+                    "stage": stage,
                     "field_key": field_key,
                     "ticket_id": item.ticket_id,
+                    "current_value": current_value,
                     "target_value": item.target_value,
+                    "error_type": type(exc).__name__,
                     "error": str(exc),
                 },
             )
@@ -171,19 +220,21 @@ def _apply_plan(
                 f"工单 {item.ticket_id} 的 {field_label} 回写失败，已停止后续写入"
             ) from exc
 
+        verified_matches = verified_value == item.target_value
+        if field_key == FAILURE_REASON_FIELD_KEY and not item.target_value.strip():
+            verified_matches = not (verified_value or "").strip()
+
         _append_audit(
             audit_path,
             {
-                "event": "write_verified"
-                if verified_value == item.target_value
-                else "verify_failed",
+                "event": "write_verified" if verified_matches else "verify_failed",
                 "field_key": field_key,
                 "ticket_id": item.ticket_id,
                 "target_value": item.target_value,
                 "verified_value": verified_value,
             },
         )
-        if verified_value != item.target_value:
+        if not verified_matches:
             raise RuntimeError(
                 f"工单 {item.ticket_id} 的 {field_label} 回读值不一致，已停止后续写入"
             )
