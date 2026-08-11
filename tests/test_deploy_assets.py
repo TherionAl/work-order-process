@@ -82,3 +82,16 @@ def test_hubei_monthly_quality_timer_runs_on_first_and_is_persistent() -> None:
     assert "--period monthly --apply --allow-catch-up" in service
     assert "OnCalendar=*-*-01 05:17:00" in timer
     assert "Persistent=true" in timer
+
+
+def test_hubei_quality_services_share_one_cross_process_lock() -> None:
+    weekly = (PROJECT_ROOT / "deploy" / "work-order-hubei-quality-weekly.service").read_text(
+        encoding="utf-8"
+    )
+    monthly = (PROJECT_ROOT / "deploy" / "work-order-hubei-quality-monthly.service").read_text(
+        encoding="utf-8"
+    )
+    lock_argument = "/usr/bin/flock --wait 7200 /opt/work_order_process/output/.hubei-quality.lock"
+
+    assert lock_argument in weekly
+    assert lock_argument in monthly
