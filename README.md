@@ -197,6 +197,29 @@ uv run python scripts/apply_hubei_sampling_status.py `
   --apply
 ```
 
+生产服务器使用独立 systemd timer 自动执行湖北质检，时间均为北京时间 05:17：
+
+- 每月 8、15、22、29 日检查前一个完整 7 天分段，仅填写尚未设置的抽检字段。
+- 每月 1 日检查上一个完整自然月，覆盖周检结论和不通过原因；最终达标时清空旧原因。
+- timer 设置 `Persistent=true`，服务器错过计划时刻后恢复会按最近一次计划窗口补跑。
+
+手工预演时必须指定与周期匹配的执行日；不加 `--apply` 不会写入接口：
+
+```powershell
+uv run python scripts/run_scheduled_hubei_quality.py `
+  --period weekly `
+  --run-at 2026-08-15T05:17:00
+
+uv run python scripts/run_scheduled_hubei_quality.py `
+  --period monthly `
+  --run-at 2026-08-01T05:17:00 `
+  --apply
+```
+
+月结覆盖只能由 `--period monthly --apply` 的调度入口自动开启；直接运行回写脚本时，只有
+额外明确传入 `--overwrite-existing` 才会覆盖现有结果。每次执行的 Excel 和 JSONL 审计仍分别
+保存在 `output/compliance_check/` 和 `output/compliance_writeback/`。
+
 ## ERP、客户台账和营收
 
 将新旧 ERP 原始文件直接合并、计算 2026 年度分摊、原子写入数据库，再从数据库导出

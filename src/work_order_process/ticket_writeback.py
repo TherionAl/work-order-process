@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,9 @@ class ReportScope:
 
     report_type: str
     province: str
+    quality_period: str = "manual"
+    start: datetime | None = None
+    end: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -96,7 +100,13 @@ def load_report_scope(report_path: Path) -> ReportScope:
             if len(row) >= 2 and row[0] is not None and row[1] is not None
         }
         try:
-            return ReportScope(report_type=values["report_type"], province=values["province"])
+            return ReportScope(
+                report_type=values["report_type"],
+                province=values["province"],
+                quality_period=values.get("quality_period", "manual"),
+                start=_optional_datetime(values.get("start")),
+                end=_optional_datetime(values.get("end")),
+            )
         except KeyError as exc:
             raise ValueError("检查报告的回写范围缺少报告类型或省份，拒绝执行回写") from exc
     finally:
@@ -110,6 +120,29 @@ def assert_hubei_writeback_scope(scope: ReportScope) -> None:
         raise ValueError(f"不支持的检查报告类型: {scope.report_type}")
     if scope.province != HUBEI_PROVINCE:
         raise ValueError(f"回写仅允许湖北省报告，当前省份: {scope.province}")
+
+
+def assert_monthly_overwrite_scope(scope: ReportScope) -> None:
+    """Allow overwrites only for a producer-marked complete natural month."""
+
+    start = scope.start
+    end = scope.end
+    if (
+        scope.quality_period != "monthly"
+        or start is None
+        or end is None
+        or start.day != 1
+        or start.time() != datetime.min.time()
+        or end.time() != datetime.min.time()
+    ):
+        raise ValueError("覆盖回写仅允许完整自然月的湖北月结报告")
+    expected_end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    if end != expected_end:
+        raise ValueError("覆盖回写仅允许完整自然月的湖北月结报告")
+
+
+def _optional_datetime(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value) if value else None
 
 
 def current_custom_field_value(detail: dict[str, Any] | None, field_key: str) -> str | None:
@@ -132,15 +165,21 @@ def current_custom_field_value(detail: dict[str, Any] | None, field_key: str) ->
 
 
 def build_sampling_status_plan(
-    sources: list[SamplingStatusSource], current_values: dict[str, str | None]
+    sources: list[SamplingStatusSource],
+    current_values: dict[str, str | None],
+    *,
+    overwrite_existing: bool = False,
 ) -> list[SamplingStatusPlan]:
-    """Build a no-overwrite plan from report conclusions and current API values."""
+    """Build status writes, optionally replacing a different existing conclusion."""
 
     plan: list[SamplingStatusPlan] = []
     for source in sources:
         target_value = COMPLIANT_OPTION_VALUE if source.compliant else NONCOMPLIANT_OPTION_VALUE
         current_value = current_values.get(source.ticket_id)
-        action = "update" if (current_value or "") in UNSET_OPTION_VALUES else "skip_existing"
+        if overwrite_existing:
+            action = "skip_unchanged" if current_value == target_value else "update"
+        else:
+            action = "update" if (current_value or "") in UNSET_OPTION_VALUES else "skip_existing"
         plan.append(
             SamplingStatusPlan(
                 ticket_id=source.ticket_id,
@@ -153,20 +192,34 @@ def build_sampling_status_plan(
 
 
 def build_failure_reason_plan(
-    sources: list[SamplingStatusSource], current_values: dict[str, str | None]
+    sources: list[SamplingStatusSource],
+    current_values: dict[str, str | None],
+    *,
+    overwrite_existing: bool = False,
 ) -> list[SamplingStatusPlan]:
-    """Plan reason-field writes only for noncompliant rows with an empty reason."""
+    """Plan reason writes and, in overwrite mode, clear stale compliant reasons."""
 
     plan: list[SamplingStatusPlan] = []
     for source in sources:
-        if source.compliant or not source.failure_reason:
-            continue
         current_value = current_values.get(source.ticket_id)
-        action = "update" if not (current_value or "").strip() else "skip_existing"
+        if overwrite_existing:
+            if not source.compliant and not source.failure_reason:
+                continue
+            target_value = "" if source.compliant else source.failure_reason
+            action = (
+                "skip_unchanged"
+                if (current_value or "").strip() == target_value.strip()
+                else "update"
+            )
+        else:
+            if source.compliant or not source.failure_reason:
+                continue
+            target_value = source.failure_reason
+            action = "update" if not (current_value or "").strip() else "skip_existing"
         plan.append(
             SamplingStatusPlan(
                 ticket_id=source.ticket_id,
-                target_value=source.failure_reason,
+                target_value=target_value,
                 action=action,
                 current_value=current_value,
             )

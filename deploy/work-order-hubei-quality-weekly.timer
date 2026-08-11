@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Hubei weekly quality inspection on days 8, 15, 22 and 29
+
+[Timer]
+OnCalendar=*-*-08,15,22,29 05:17:00
+Persistent=true
+AccuracySec=1m
+Unit=work-order-hubei-quality-weekly.service
+
+[Install]
+WantedBy=timers.target

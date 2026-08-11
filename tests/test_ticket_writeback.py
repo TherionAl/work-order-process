@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 from openpyxl import Workbook
 
@@ -10,6 +12,7 @@ from work_order_process.ticket_writeback import (
     ReportScope,
     SamplingStatusSource,
     assert_hubei_writeback_scope,
+    assert_monthly_overwrite_scope,
     build_failure_reason_plan,
     build_sampling_status_plan,
     current_custom_field_value,
@@ -44,6 +47,24 @@ def test_build_plan_maps_report_conclusion_to_dropdown_values_and_skips_existing
     ]
 
 
+def test_monthly_status_plan_overwrites_changed_values_and_skips_matching_values() -> None:
+    sources = [
+        SamplingStatusSource(ticket_id="1", compliant=True),
+        SamplingStatusSource(ticket_id="2", compliant=False),
+    ]
+
+    planned = build_sampling_status_plan(
+        sources,
+        {"1": NONCOMPLIANT_OPTION_VALUE, "2": NONCOMPLIANT_OPTION_VALUE},
+        overwrite_existing=True,
+    )
+
+    assert [(item.ticket_id, item.target_value, item.action) for item in planned] == [
+        ("1", COMPLIANT_OPTION_VALUE, "update"),
+        ("2", NONCOMPLIANT_OPTION_VALUE, "skip_unchanged"),
+    ]
+
+
 def test_build_failure_reason_plan_only_writes_noncompliant_rows_without_a_reason() -> None:
     sources = [
         SamplingStatusSource(ticket_id="1", compliant=True),
@@ -62,6 +83,26 @@ def test_build_failure_reason_plan_only_writes_noncompliant_rows_without_a_reaso
     ]
 
 
+def test_monthly_reason_plan_overwrites_changed_reasons_and_clears_compliant_reasons() -> None:
+    sources = [
+        SamplingStatusSource(ticket_id="1", compliant=True),
+        SamplingStatusSource(ticket_id="2", compliant=False, failure_reason="新的不通过原因"),
+        SamplingStatusSource(ticket_id="3", compliant=False, failure_reason="相同原因"),
+    ]
+
+    planned = build_failure_reason_plan(
+        sources,
+        {"1": "旧的不通过原因", "2": "旧原因", "3": "相同原因"},
+        overwrite_existing=True,
+    )
+
+    assert [(item.ticket_id, item.target_value, item.action) for item in planned] == [
+        ("1", "", "update"),
+        ("2", "新的不通过原因", "update"),
+        ("3", "相同原因", "skip_unchanged"),
+    ]
+
+
 def test_hubei_writeback_scope_requires_the_exact_hubei_province() -> None:
     assert_hubei_writeback_scope(
         ReportScope(report_type="hubei_compliance_check", province="湖北省")
@@ -76,6 +117,29 @@ def test_hubei_writeback_scope_requires_the_exact_hubei_province() -> None:
 def test_hubei_writeback_scope_rejects_an_unrecognized_report_type() -> None:
     with pytest.raises(ValueError, match="不支持"):
         assert_hubei_writeback_scope(ReportScope(report_type="generic", province="湖北省"))
+
+
+def test_monthly_overwrite_scope_requires_a_complete_natural_month() -> None:
+    assert_monthly_overwrite_scope(
+        ReportScope(
+            report_type="hubei_compliance_check",
+            province="湖北省",
+            quality_period="monthly",
+            start=datetime(2026, 7, 1),
+            end=datetime(2026, 8, 1),
+        )
+    )
+
+    with pytest.raises(ValueError, match="完整自然月"):
+        assert_monthly_overwrite_scope(
+            ReportScope(
+                report_type="hubei_compliance_check",
+                province="湖北省",
+                quality_period="weekly",
+                start=datetime(2026, 7, 1),
+                end=datetime(2026, 7, 8),
+            )
+        )
 
 
 def test_load_report_scope_reads_hubei_scope_metadata(tmp_path) -> None:

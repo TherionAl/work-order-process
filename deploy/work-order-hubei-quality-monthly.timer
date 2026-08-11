@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Hubei complete previous-month quality inspection on day 1
+
+[Timer]
+OnCalendar=*-*-01 05:17:00
+Persistent=true
+AccuracySec=1m
+Unit=work-order-hubei-quality-monthly.service
+
+[Install]
+WantedBy=timers.target

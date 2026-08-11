@@ -1,0 +1,18 @@
+[Unit]
+Description=Hubei complete previous-month work order quality inspection
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=workorder
+Group=workorder
+WorkingDirectory=/opt/work_order_process
+ExecStart=/opt/work_order_process/.venv/bin/python /opt/work_order_process/scripts/run_scheduled_hubei_quality.py --period monthly --apply --allow-catch-up
+TimeoutStartSec=4h
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWriteDirectories=/opt/work_order_process/output

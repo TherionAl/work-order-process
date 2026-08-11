@@ -54,3 +54,31 @@ def test_mysql_backup_timer_is_persistent_and_daily() -> None:
     assert "Group=workorder" in service
     assert "OnCalendar=*-*-* 01:00:00" in timer
     assert "Persistent=true" in timer
+
+
+def test_hubei_weekly_quality_timer_runs_four_segments_and_is_persistent() -> None:
+    service = (PROJECT_ROOT / "deploy" / "work-order-hubei-quality-weekly.service").read_text(
+        encoding="utf-8"
+    )
+    timer = (PROJECT_ROOT / "deploy" / "work-order-hubei-quality-weekly.timer").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Type=oneshot" in service
+    assert "--period weekly --apply --allow-catch-up" in service
+    assert "OnCalendar=*-*-08,15,22,29 05:17:00" in timer
+    assert "Persistent=true" in timer
+
+
+def test_hubei_monthly_quality_timer_runs_on_first_and_is_persistent() -> None:
+    service = (PROJECT_ROOT / "deploy" / "work-order-hubei-quality-monthly.service").read_text(
+        encoding="utf-8"
+    )
+    timer = (PROJECT_ROOT / "deploy" / "work-order-hubei-quality-monthly.timer").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Type=oneshot" in service
+    assert "--period monthly --apply --allow-catch-up" in service
+    assert "OnCalendar=*-*-01 05:17:00" in timer
+    assert "Persistent=true" in timer

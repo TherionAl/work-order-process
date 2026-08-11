@@ -14,6 +14,7 @@ from work_order_process.ticket_writeback import (
     FAILURE_REASON_FIELD_KEY,
     SAMPLING_STATUS_FIELD_KEY,
     assert_hubei_writeback_scope,
+    assert_monthly_overwrite_scope,
     build_failure_reason_plan,
     build_sampling_status_plan,
     current_custom_field_value,
@@ -27,6 +28,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--input", type=Path, required=True, help="合规检查报告 xlsx 文件")
     parser.add_argument(
         "--apply", action="store_true", help="实际调用接口写入；未指定时仅生成写入计划"
+    )
+    parser.add_argument(
+        "--overwrite-existing",
+        action="store_true",
+        help="覆盖已有抽检结论和原因；仅用于完整自然月复检",
     )
     parser.add_argument(
         "--audit-dir",
@@ -54,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
 
     scope = load_report_scope(args.input)
     assert_hubei_writeback_scope(scope)
+    if args.overwrite_existing:
+        assert_monthly_overwrite_scope(scope)
     sources = load_sampling_status_sources(args.input)
     if not sources:
         raise ValueError("合规检查报告中没有可回写的工单")
@@ -67,9 +75,11 @@ def main(argv: list[str] | None = None) -> int:
             "at": datetime.now().isoformat(timespec="seconds"),
             "input": str(args.input.resolve()),
             "apply": args.apply,
+            "overwrite_existing": args.overwrite_existing,
             "status_field_key": SAMPLING_STATUS_FIELD_KEY,
             "reason_field_key": FAILURE_REASON_FIELD_KEY,
             "province": scope.province,
+            "quality_period": scope.quality_period,
             "source_count": len(sources),
         },
     )
@@ -94,8 +104,16 @@ def main(argv: list[str] | None = None) -> int:
                 },
             )
 
-        status_plan = build_sampling_status_plan(sources, current_status_values)
-        reason_plan = build_failure_reason_plan(sources, current_reason_values)
+        status_plan = build_sampling_status_plan(
+            sources,
+            current_status_values,
+            overwrite_existing=args.overwrite_existing,
+        )
+        reason_plan = build_failure_reason_plan(
+            sources,
+            current_reason_values,
+            overwrite_existing=args.overwrite_existing,
+        )
         status_updates = sum(item.action == "update" for item in status_plan)
         reason_updates = sum(item.action == "update" for item in reason_plan)
         print(
@@ -128,7 +146,7 @@ def _apply_plan(
                 {
                     "field_key": field_key,
                     "ticket_id": item.ticket_id,
-                    "event": "skipped_existing",
+                    "event": item.action,
                     "current_value": item.current_value,
                 },
             )

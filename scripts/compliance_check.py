@@ -395,7 +395,21 @@ def check_duplicates(results: list[dict], threshold: float = 0.8) -> list[dict]:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     add_scope_arguments(parser)
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--output-file",
+        type=Path,
+        help="完整的 Excel 输出路径；不能与 --output-dir 同时使用",
+    )
+    parser.add_argument(
+        "--quality-period",
+        choices=("manual", "weekly", "monthly"),
+        default="manual",
+        help="报告执行周期标记；生产调度入口会自动设置",
+    )
+    args = parser.parse_args(argv)
+    if args.output_file is not None and args.output_dir is not None:
+        parser.error("--output-file 不能与 --output-dir 同时使用")
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -862,6 +876,7 @@ def main(argv: list[str] | None = None) -> None:
     for key, value in (
         ("report_type", "hubei_compliance_check"),
         ("province", scope.province),
+        ("quality_period", args.quality_period),
         ("service_catalog_contains", scope.service_catalog_contains),
         ("start", scope.start.isoformat(sep=" ")),
         ("end", scope.end.isoformat(sep=" ")),
@@ -871,12 +886,17 @@ def main(argv: list[str] | None = None) -> None:
     ws3.column_dimensions["B"].width = 50
 
     # 保存
-    output_dir = (
-        Path(args.output_dir) if args.output_dir else PROJECT_ROOT / "output" / "compliance_check"
-    )
-    output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = output_dir / f"故障单合规性检查_{timestamp}.xlsx"
+    if args.output_file is not None:
+        output_path = args.output_file
+    else:
+        output_dir = (
+            Path(args.output_dir)
+            if args.output_dir
+            else PROJECT_ROOT / "output" / "compliance_check"
+        )
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = output_dir / f"故障单合规性检查_{timestamp}.xlsx"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
     print(f"\n已输出到: {output_path}")
 

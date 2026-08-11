@@ -780,7 +780,8 @@ uv run --all-groups work_order_process metric-ticket `
 | `work_order_process.business_time` | 工作日历和工作时长 | 读 JSON |
 | `work_order_process.time_metrics` | 月度/单工单节点时长 | MySQL 只读、JSON |
 | `work_order_process.hubei_analysis` | 湖北专项报表筛选、版本字段关联和重复判定 | MySQL 只读辅助逻辑 |
-| `work_order_process.ticket_writeback` | 合规抽检结论解析、写入计划和现值判定 | 读取 Excel 的纯辅助逻辑 |
+| `work_order_process.hubei_quality_schedule` | 湖北周检/月结窗口计算和报告、回写 CLI 编排 | Excel、API 回写子进程 |
+| `work_order_process.ticket_writeback` | 合规抽检结论解析、覆盖范围校验、写入计划和现值判定 | 读取 Excel 的纯辅助逻辑 |
 | `work_order_process.daily_runner` | 生产定时任务 | API、MySQL、日志 |
 | `work_order_process.io` | UTF-8 JSON 写入 | 文件 |
 
@@ -1513,15 +1514,24 @@ ERP 发布总控：
 - `work_order_process.hubei_analysis._strip_numbers`：移除描述中的数字，用于“仅编号不同”例外识别。
 - `work_order_process.hubei_analysis._similarity`：计算标准化描述相似度。
 
+#### 湖北质检调度：`work_order_process.hubei_quality_schedule`
+
+- `work_order_process.hubei_quality_schedule.QualityWindow`：记录一次周检或月结的左闭右开时间窗口及覆盖策略。
+- `work_order_process.hubei_quality_schedule.scheduled_window`：严格按 1、8、15、22、29 日计算计划窗口。
+- `work_order_process.hubei_quality_schedule.most_recent_scheduled_at`：为持久化 timer 补跑定位最近一次名义执行日。
+- `work_order_process.hubei_quality_schedule.run_scheduled_quality`：先生成带周期标记的湖北报告，再调用预演或实际回写 CLI。
+
 #### 抽检结论回写：`work_order_process.ticket_writeback`
 
-- `work_order_process.ticket_writeback`：从合规检查报告构造不覆盖已有结果的工单字段回写计划。
+- `work_order_process.ticket_writeback`：从合规检查报告构造周检不覆盖、月结可覆盖的工单字段回写计划。
 - `work_order_process.ticket_writeback.ReportScope`：报告生成时写入的机器可读执行范围。
 - `work_order_process.ticket_writeback.SamplingStatusSource`：检查报告中单条工单的合规结论。
 - `work_order_process.ticket_writeback.SamplingStatusPlan`：包含目标下拉选项与写入/跳过动作的预检计划项。
 - `work_order_process.ticket_writeback.load_sampling_status_sources`：读取 Excel `工单详情` 页的工单 ID 和合规结论。
 - `work_order_process.ticket_writeback.load_report_scope`：读取回写前必需的报告类型和省份范围。
 - `work_order_process.ticket_writeback.assert_hubei_writeback_scope`：拒绝非湖北省或非湖北专项报告的回写。
+- `work_order_process.ticket_writeback.assert_monthly_overwrite_scope`：仅允许带月结标记且覆盖完整自然月的报告启用覆盖。
+- `work_order_process.ticket_writeback._optional_datetime`：解析报告范围中的可选 ISO-8601 时间。
 - `work_order_process.ticket_writeback.current_custom_field_value`：从工单详情读取指定自定义字段的当前原始值。
 - `work_order_process.ticket_writeback.build_sampling_status_plan`：把合规结论映射为下拉选项，并跳过已有非占位值的工单。
 - `work_order_process.ticket_writeback.build_failure_reason_plan`：仅为不合规且“检查不通过原因”为空的工单生成文本回写计划。
